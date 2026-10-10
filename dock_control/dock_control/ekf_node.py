@@ -35,9 +35,11 @@ from tf2_ros import TransformBroadcaster
 TF_RATE = 20.0      # Hz, target -> base_link (brief Section 3)
 ZERO_S = 2.0        # s of stationary IMU averaged into the accelerometer offset (brief Section 5)
 
-# The bridge publishes imu/data RELIABLE, depth 10: a filter wants every sample.
+# BEST_EFFORT matches a RELIABLE publisher (the bridge) and a sensor-data one (a
+# dedicated IMU driver) alike, where RELIABLE would silently miss the second. On one
+# machine nothing is lost; depth 10 keeps every sample through a slow callback.
 IMU_QOS = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=10,
-                     reliability=QoSReliabilityPolicy.RELIABLE)
+                     reliability=QoSReliabilityPolicy.BEST_EFFORT)
 # The pipeline's own profile, but VOLATILE: replaying its latched (TRANSIENT_LOCAL)
 # history at start-up would initialise the filter from stale poses.
 POSE_QOS = QoSProfile(history=INFERENCE_RESULT_QOS.history, depth=INFERENCE_RESULT_QOS.depth,

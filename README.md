@@ -81,16 +81,33 @@ ros2 service call /dock/arm std_srvs/srv/SetBool "{data: true}"   # false: back 
 
 Launch arguments: `config`, `rt`, `ekf_core`, `mpc_core`, `exposure_offset` (image
 stamp minus capture time, from the LED test), `qp_solver` (`daqp` or `osqp`),
-`record`.
+`imu_topic`, `record`.
+
+### On the Pi
+
+The Pi runs everything in the `convchart-wireless/pi:jazzy` container of
+`Conv-ChArT-Wireless-Inference`, whose image carries `daqp`. Its compose file
+mounts this repository from `~/holonomic_mpc_ekf` at `/controller_ws`, and the
+container's shell sources `/controller_ws/install` on top of the inference
+overlay once it is built:
+
+```bash
+cd ~/holonomic_mpc_ekf && git pull                # on the Pi host
+docker compose exec pi bash                        # or pi-camera
+cd /controller_ws && colcon build && source install/setup.bash
+```
 
 ## What the existing nodes still have to provide
 
 - **IMU.** The EKF is driven by body-frame linear acceleration (gravity removed)
-  and yaw rate at 200 Hz. Today the bridge's `imu/data` is 50 Hz with yaw and yaw
-  rate only (`linear_acceleration_covariance[0] = -1`); `ekf_node` logs an error
-  if that is still so. The bridge also stamps samples on arrival; the brief wants
-  the sensor's own stamp re-anchored to ROS time (Section 4), which the bridge can
-  do from `mega_t_ms`.
+  and yaw rate at 200 Hz, in `base_link`, stamped at the sample time (the
+  sensor's clock re-anchored to ROS time, brief Section 4). The bridge's
+  `imu/data` is 50 Hz with yaw and yaw rate only
+  (`linear_acceleration_covariance[0] = -1`, which `ekf_node` reports), so the
+  dedicated IMU node provides it. Exactly one node may publish the topic the
+  EKF reads: run the bridge with `publish_imu:=false`, or point the EKF at the
+  IMU node's topic with `imu_topic:=...`. The subscription is BEST_EFFORT, so a
+  RELIABLE or a sensor-data publisher both match.
 - **Limits.** The firmware saturates the wheels itself (`config.h`: `WHEEL_MAX_MPS`
   0.5, `CHASSIS_L_PLUS_W` 0.24), while the MPC's wheel rows use `Rw`, `lx + ly`
   (0.30) and `w_max` (15 rad/s = 0.76 m/s at the rim) from the YAML. Make them
