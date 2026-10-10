@@ -12,6 +12,11 @@ Publishes dock/estimate after every IMU sample, fiducial/fix for every pose (the
 log and the supervisor's roll and pitch monitor), and target -> base_link on TF
 at 20 Hz. Nothing is estimated until the start-up zeroing has finished and the
 first pose has initialised the filter.
+
+The filter steps in fixed T = 1/imu.rate over each sample's elapsed time
+(Ekf.advance), so it stays right if the IMU drops samples or runs slow; the
+measured IMU rate goes out in every estimate, and the supervisor will not start
+moving unless it is within 10 % of imu.rate.
 """
 
 import math
@@ -34,6 +39,7 @@ from tf2_ros import TransformBroadcaster
 
 TF_RATE = 20.0      # Hz, target -> base_link (brief Section 3)
 ZERO_S = 2.0        # s of stationary IMU averaged into the accelerometer offset (brief Section 5)
+RATE_TOL = 0.1      # warn when the measured IMU rate is off the configured one by more
 
 # BEST_EFFORT matches a RELIABLE publisher (the bridge) and a sensor-data one (a
 # dedicated IMU driver) alike, where RELIABLE would silently miss the second. On one
@@ -61,9 +67,8 @@ class EkfNode(Node):
         self.ekf = Ekf(p)
         self.chain = FiducialChain(p)
         self.exposure_ns = round(exposure_offset * 1e9)
-        self.tf_every = round(p['imu']['rate'] / TF_RATE)
-        self.zero_n = round(ZERO_S * p['imu']['rate'])
-
+        self.rate = p['imu']['rate']
+        self.tf_every = round(self.rate / TF_RATE)      # filter steps between transforms
         self.var_th = self.chain.sigma_th ** 2
 
         # --- reused every IMU sample, so nothing is allocated at 200 Hz ---
@@ -79,10 +84,14 @@ class EkfNode(Node):
         self.tf_msg.child_frame_id = 'base_link'
 
         # --- state ---
+        self.zeroed = False
+        self.zero_t0 = None                     # first stamp of the zeroing window
         self.zero_sum = np.zeros(3)             # sums of a_x, a_y and r while zeroing
         self.zero_count = 0
         self.accel_offset = np.zeros(2)
-        self.n = 0
+        self.rate_t0, self.rate_count = None, 0
+        self.imu_rate = 0.0                     # measured over the last second of stamps
+        self.tf_steps = 0
         self.last_accept = -math.inf            # capture time of the last accepted fix [s]
         self.last_nis = math.nan
         self.last_accepted = False
@@ -95,19 +104,36 @@ class EkfNode(Node):
 
     def on_imu(self, msg):
         a, w = msg.linear_acceleration, msg.angular_velocity
-        if self.zero_count < self.zero_n:
-            self.zero(msg, a.x, a.y, w.z)
+        t = seconds(msg.header.stamp)
+        self.measure_rate(t)
+        if not self.zeroed:
+            self.zero(msg, t, a.x, a.y, w.z)
             return
         if not self.ekf.initialised:
             return
         self.u[0] = a.x - self.accel_offset[0]
         self.u[1] = a.y - self.accel_offset[1]
         self.u[2] = w.z
-        t = seconds(msg.header.stamp)
-        self.ekf.predict(self.u, t)
-        self.publish_estimate(msg.header.stamp, t)
+        steps = self.ekf.advance(self.u, t)
+        if steps:
+            self.publish_estimate(msg.header.stamp, t, steps)
 
-    def zero(self, msg, ax, ay, r):
+    def measure_rate(self, t):
+        """Count IMU samples over each second of their stamps; warn when off imu.rate."""
+        if self.rate_t0 is None:
+            self.rate_t0 = t
+            return
+        self.rate_count += 1
+        if t - self.rate_t0 >= 1.0:
+            self.imu_rate = self.rate_count / (t - self.rate_t0)
+            self.rate_t0, self.rate_count = t, 0
+            if abs(self.imu_rate - self.rate) > RATE_TOL * self.rate:
+                self.get_logger().warning(
+                    f'IMU at {self.imu_rate:.0f} Hz, configured for {self.rate:.0f} Hz: the '
+                    f'EKF still steps T = {1e3 / self.rate:.0f} ms, but the supervisor will '
+                    'not start moving', throttle_duration_sec=5.0)
+
+    def zero(self, msg, t, ax, ay, r):
         """
         Average the stationary start-up window into the accelerometer offset (brief Section 5).
 
@@ -115,23 +141,26 @@ class EkfNode(Node):
         be still while the node starts. The gyro mean is logged for the bias check
         of brief Section 10.a (step 4), not subtracted.
         """
-        if self.zero_count == 0 and msg.linear_acceleration_covariance[0] == -1.0:
-            self.get_logger().error(
-                'imu/data carries no linear acceleration (covariance[0] = -1); the EKF is '
-                'driven by it, so the bridge has to publish it')
+        if self.zero_t0 is None:
+            self.zero_t0 = t
+            if msg.linear_acceleration_covariance[0] == -1.0:
+                self.get_logger().error(
+                    'imu/data carries no linear acceleration (covariance[0] = -1); the EKF '
+                    'is driven by it, so the IMU node has to publish it')
         self.zero_sum[0] += ax
         self.zero_sum[1] += ay
         self.zero_sum[2] += r
         self.zero_count += 1
-        if self.zero_count == self.zero_n:
-            mean = self.zero_sum / self.zero_n
+        if t - self.zero_t0 >= ZERO_S:
+            mean = self.zero_sum / self.zero_count
             self.accel_offset[:] = mean[:2]
+            self.zeroed = True
             self.get_logger().info(
                 f'IMU zeroed over {ZERO_S:.1f} s: accel offset ({mean[0]:+.4f}, {mean[1]:+.4f}) '
                 f'm/s^2, gyro mean {math.degrees(mean[2]):+.3f} deg/s')
 
     def on_pose(self, msg):
-        if msg.reason or self.zero_count < self.zero_n:
+        if msg.reason or not self.zeroed:
             return                              # refused by the pipeline, or still zeroing
         ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec - self.exposure_ns
         stamp = Time(sec=ns // 1_000_000_000, nanosec=ns % 1_000_000_000)
@@ -165,19 +194,21 @@ class EkfNode(Node):
         var_p = self.chain.sigma_p(d) ** 2
         return np.array((x, y, theta)), np.diag((var_p, var_p, self.var_th)), roll, pitch, d
 
-    def publish_estimate(self, stamp, t):
+    def publish_estimate(self, stamp, t, steps):
         m, ekf = self.est, self.ekf
         np.copyto(self.p_diag, ekf.P.diagonal())
         m.header.stamp = stamp
         m.x = ekf.x
         m.p_diag = self.p_diag
         m.r_gyro = float(self.u[2])
+        m.imu_rate = self.imu_rate
         m.fix_age = t - self.last_accept
         m.last_nis = float(self.last_nis)
         m.last_fix_accepted = bool(self.last_accepted)
         self.est_pub.publish(m)
-        self.n += 1
-        if self.n % self.tf_every == 0:
+        self.tf_steps += steps                  # 20 Hz of filter time, whatever the IMU rate
+        if self.tf_steps >= self.tf_every:
+            self.tf_steps %= self.tf_every
             self.publish_tf(stamp)
 
     def publish_fix(self, stamp, z, R, roll, pitch, d):

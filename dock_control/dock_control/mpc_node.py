@@ -17,7 +17,7 @@ import time
 from convchart_interfaces.msg import DriveStatus
 from dock_control import params
 from dock_control.mpc import Mpc
-from dock_control.rosutil import run
+from dock_control.rosutil import run, seconds
 from dock_control.supervisor import Inputs, Supervisor
 from dock_msgs.msg import DockEstimate, DockStage, FiducialFix, MpcInfo
 from geometry_msgs.msg import Twist
@@ -96,6 +96,8 @@ class MpcNode(Node):
         inp.now = self.get_clock().now().nanoseconds * 1e-9
         if est is not None:
             inp.x, inp.p_diag, inp.fix_age = est.x, est.p_diag, est.fix_age
+            inp.est_age = inp.now - seconds(est.header.stamp)
+            inp.imu_rate = est.imu_rate
         out = self.sup.step(inp)
         self.publish_stage(out)
 

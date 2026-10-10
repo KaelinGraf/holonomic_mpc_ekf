@@ -17,12 +17,19 @@ It does two different jobs:
   falling with distance, without changing Output; the verified design and the
   report's results use the two stages.
 
+It also guards the estimate itself: motion starts only with the IMU at its
+configured rate, and any moving stage aborts once the estimate stops arriving
+(a dead IMU node would otherwise leave the MPC steering on a frozen state).
+
 Thresholds are converted to the units the comparisons use once, in __init__.
 """
 
 from dataclasses import dataclass
 import enum
 import math
+
+EST_TIMEOUT_S = 0.1     # an estimate older than this is stale: 20 IMU periods, 2 ticks
+IMU_RATE_TOL = 0.1      # start moving only with the IMU within 10 % of imu.rate
 
 
 class Stage(enum.IntEnum):
@@ -50,6 +57,8 @@ class Inputs:
     drive_ok: bool = False      # serial bridge armed and streaming (STALLED or RUNNING)
     x: object = None            # latest estimate [x, y, theta, vx, vy]; None until the EKF starts
     p_diag: object = None       # its covariance diagonal
+    est_age: float = math.inf   # seconds since that estimate's IMU sample
+    imu_rate: float = 0.0       # IMU samples per second, as the EKF measures them
     fix_age: float = math.inf   # seconds since the last accepted fix
     roll: float = 0.0           # monitored only (brief Section 2)
     pitch: float = 0.0
@@ -75,6 +84,7 @@ class Supervisor:
         sup, lim, tol, mpc = p['sup'], p['lim'], p['tol'], p['mpc']
 
         # --- constant, built once ---
+        self.imu_rate = p['imu']['rate']
         self.standoff_ref = (-sup['standoff'], 0.0, 0.0)
         self.dock_ref = (0.0, 0.0, 0.0)
         self.align_tol_y = sup['align_tol_m']                 # APPROACH -> FINAL
@@ -122,7 +132,7 @@ class Supervisor:
             nxt = Stage.ACQUIRE
         elif stage == Stage.ACQUIRE:
             # the EKF publishes nothing until its first accepted fix
-            nxt = Stage.APPROACH if inp.x is not None and inp.drive_ok else stage
+            nxt = Stage.APPROACH if self._ready(inp) else stage
         elif stage in (Stage.APPROACH, Stage.FINAL) and (
                 inp.fix_age > self.hold_after_s or inp.mpc_misses >= 2):
             nxt = Stage.HOLD
@@ -150,16 +160,22 @@ class Supervisor:
 
     def _unsafe(self, inp):
         """
-        Return whether to abort a moving stage: drive lost, covariance blown, off corridor.
+        Return whether to abort a moving stage: drive, estimate, covariance or corridor.
 
-        The heading corridor is soft in the MPC, so a brief excursion past it is
+        Drive lost, estimate stale, or position variance past (0.05 m)^2 abort
+        at once. The heading corridor is soft in the MPC, so a brief excursion past it is
         expected (a start near +-20 deg, the initial turn); only one that lasts
         longer than hold_after_s aborts.
         """
         off_corridor = (self.off_corridor_since is not None
                         and inp.now - self.off_corridor_since > self.hold_after_s)
-        return (not inp.drive_ok or off_corridor
+        return (not inp.drive_ok or off_corridor or inp.est_age > EST_TIMEOUT_S
                 or inp.p_diag[0] > self.p_abort or inp.p_diag[1] > self.p_abort)
+
+    def _ready(self, inp):
+        """Return whether motion may start: estimate fresh, IMU at its rate, drive armed."""
+        return (inp.x is not None and inp.drive_ok and inp.est_age <= EST_TIMEOUT_S
+                and abs(inp.imu_rate - self.imu_rate) <= IMU_RATE_TOL * self.imu_rate)
 
     def _aligned(self, x):
         """

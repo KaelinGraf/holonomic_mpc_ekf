@@ -79,7 +79,7 @@ def test_docks_from_the_report_start_pose(p):
             inp.now = t
             if ekf.initialised:
                 inp.x, inp.p_diag = ekf.x.copy(), ekf.P.diagonal().copy()
-                inp.fix_age = t - last_fix
+                inp.fix_age, inp.est_age, inp.imu_rate = t - last_fix, 0.0, 1.0 / T
             out = sup.step(inp)
             stage = out.stage
             if stage == Stage.DOCKED:

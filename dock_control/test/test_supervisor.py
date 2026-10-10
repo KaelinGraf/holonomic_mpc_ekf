@@ -11,7 +11,7 @@ def _inputs(**changes):
     """Return armed, healthy inputs with the robot 1 m out, changed as given."""
     values = {'now': 0.0, 'armed': True, 'drive_ok': True,
               'x': np.array([-1.0, 0.1, 0.05, 0.0, 0.0]), 'p_diag': np.full(5, 1e-6),
-              'fix_age': 0.05, 'u_last': np.zeros(3)}
+              'est_age': 0.004, 'imu_rate': 200.0, 'fix_age': 0.05, 'u_last': np.zeros(3)}
     values.update(changes)
     return Inputs(**values)
 
@@ -81,10 +81,21 @@ def test_two_mpc_misses_hold(p):
     assert sup.step(_inputs(mpc_misses=2)).stage == Stage.HOLD
 
 
-@pytest.mark.parametrize('bad', [{'drive_ok': False}, {'p_diag': np.full(5, 0.06 ** 2)}])
+@pytest.mark.parametrize('bad', [{'drive_ok': False}, {'p_diag': np.full(5, 0.06 ** 2)},
+                                 {'est_age': 0.15}])
 def test_abort_from_a_moving_stage(p, bad):
-    """Drive lost, or the position covariance above (0.05 m)^2, aborts at once."""
+    """Drive lost, covariance above (0.05 m)^2, or the estimate stale, aborts at once."""
     assert _approaching(p).step(_inputs(**bad)).stage == Stage.ABORT
+
+
+@pytest.mark.parametrize('bad', [{'imu_rate': 50.0}, {'imu_rate': 0.0}, {'est_age': 0.15},
+                                 {'drive_ok': False}])
+def test_motion_waits_for_a_healthy_imu_and_drive(p, bad):
+    """ACQUIRE holds until the IMU runs at its rate, the estimate is fresh and the drive is up."""
+    sup = Supervisor(p)
+    sup.step(_inputs(x=None))
+    assert sup.step(_inputs(**bad)).stage == Stage.ACQUIRE
+    assert sup.step(_inputs(imu_rate=190.0)).stage == Stage.APPROACH        # within 10 %
 
 
 def test_abort_only_on_a_lasting_corridor_excursion(p):

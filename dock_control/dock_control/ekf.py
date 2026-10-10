@@ -96,6 +96,7 @@ class Ekf:
         # --- state ---
         self.x = np.zeros(5)
         self.P = np.zeros((5, 5))
+        self.t = None               # the filter's clock: time of the last step [s]
         self.initialised = False
         self.buffer = RingBuffer(round(ekf['buffer_s'] * imu['rate']))
 
@@ -133,11 +134,12 @@ class Ekf:
         self.P[:3, :3] = R
         self.P[3, 3] = self.P[4, 4] = self.sigma_v0_sq
         self.buffer.push(stamp, self.x)
+        self.t = stamp
         self.initialised = True
 
     def predict(self, u, stamp):
         """
-        Propagate x and P over one IMU sample and buffer the result (report eq. 4).
+        Propagate x and P over one step of T and buffer the result at stamp (report eq. 4).
 
         x <- f(x, u) with the heading wrapped; P <- F P F' + G Sigma_u G' + Q_floor,
         symmetrised, with F and G evaluated before the step.
@@ -148,6 +150,28 @@ class Ekf:
         P = F @ self.P @ F.T + G @ self.Sigma_u @ G.T + self.Q_floor
         self.P = 0.5 * (P + P.T)
         self.buffer.push(stamp, self.x)
+        self.t = stamp
+
+    def advance(self, u, stamp):
+        """
+        Predict in steps of T up to a sample's stamp, holding u; return the steps taken.
+
+        The model is discretised at T (report eq. 2), so the filter keeps its own
+        clock and takes round((stamp - t) / T) steps per sample: one at the
+        IMU's 200 Hz (the MATLAB schedule exactly), more after a dropped sample
+        or from a slower stream, none for a repeated stamp. Time is neither lost
+        nor invented, whatever the IMU's rate. A gap longer than the buffer
+        steps one buffer's worth and re-anchors the clock to the stamp.
+        """
+        n = round((stamp - self.t) / self.T)
+        if n <= 0:
+            return 0
+        steps = min(n, self.buffer.depth)
+        for _ in range(steps):
+            self.predict(u, self.t + self.T)
+        if n > steps:
+            self.t = stamp
+        return steps
 
     def nis(self, z, R, stamp):
         """Return the NIS a fix would have, without applying it (inf before the buffer)."""
