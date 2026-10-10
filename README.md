@@ -59,7 +59,7 @@ colcon test --packages-select dock_control && colcon test-result --verbose
 On the host with conda active, CMake picks conda's Python for the message
 packages and fails (`No module named 'em'`): `conda deactivate` first, or add
 `--cmake-args -DPython3_EXECUTABLE=/usr/bin/python3`. The Pi image has neither
-problem, but needs `pip install daqp==0.10.3` added (it has an aarch64 wheel).
+problem and carries daqp (see "On the Pi").
 
 ## Run
 
@@ -148,6 +148,13 @@ cd /controller_ws && colcon build && source install/setup.bash
   e-stop) and `drive/status` take its place.
 - **Messages.** `MpcInfo` carries the command `u`; there is no `dock/cmd_body`.
 - **IMU zeroing** happens in `ekf_node`, so it works whatever publishes `imu/data`.
+- **IMU rate.** The EKF steps its fixed T over each sample's elapsed time
+  (`Ekf.advance`), so a dropped sample or a slower stream costs accuracy, not
+  time; at 200 Hz that is one step a sample, as in the MATLAB. `ekf_node`
+  publishes the measured rate in `DockEstimate.imu_rate`, and the supervisor
+  starts moving only with it within 10 % of `imu.rate`.
+- **Stale estimate.** A moving stage aborts once the estimate is more than
+  100 ms old, so a dead IMU node cannot leave the MPC steering on a frozen state.
 
 ## Tests
 
