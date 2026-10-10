@@ -69,16 +69,12 @@ class EkfNode(Node):
         self.exposure_ns = round(exposure_offset * 1e9)
         self.rate = p['imu']['rate']
         self.tf_every = round(self.rate / TF_RATE)      # filter steps between transforms
-        self.var_th = self.chain.sigma_th ** 2
 
         # --- reused every IMU sample, so nothing is allocated at 200 Hz ---
         self.u = np.zeros(3)                    # [a_x, a_y, r]
         self.p_diag = np.zeros(5)
         self.est = DockEstimate()
         self.fix = FiducialFix()
-        self.fix.sigma_th = self.chain.sigma_th
-        self.fix.marker_id = 0                  # one board
-        self.fix.valid = True                   # refused frames are not published
         self.tf_msg = TransformStamped()
         self.tf_msg.header.frame_id = 'target'
         self.tf_msg.child_frame_id = 'base_link'
@@ -165,17 +161,22 @@ class EkfNode(Node):
         ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec - self.exposure_ns
         stamp = Time(sec=ns // 1_000_000_000, nanosec=ns % 1_000_000_000)
         t_capture = ns * 1e-9
-        fix = self.measure(msg.pose.pose)
+        fix, cov_valid = self.measure(msg.pose), msg.covariance_valid
         if msg.ambiguous:
             # Two IPPE solutions (docking_design.md 2.3): keep the one nearer the
             # prediction, and never start the filter from an ambiguous pose.
             if not self.ekf.initialised:
                 return
-            alt = self.measure(msg.pose_alt.pose)
-            if self.ekf.nis(alt[0], alt[1], t_capture) < self.ekf.nis(fix[0], fix[1], t_capture):
-                fix = alt
+            alt = self.measure(msg.pose_alt)
+            if alt is not None and (fix is None or self.ekf.nis(alt[0], alt[1], t_capture)
+                                    < self.ekf.nis(fix[0], fix[1], t_capture)):
+                fix, cov_valid = alt, msg.covariance_valid_alt
+        if fix is None:
+            self.get_logger().warning('a pose arrived without a usable covariance: not fused',
+                                      throttle_duration_sec=5.0)
+            return
         z, R = fix[0], fix[1]
-        self.publish_fix(stamp, *fix)
+        self.publish_fix(stamp, fix, cov_valid, msg.ambiguous)
 
         if not self.ekf.initialised:
             self.ekf.initialise(z, R, t_capture)
@@ -186,13 +187,20 @@ class EkfNode(Node):
             self.last_accept = t_capture
 
     def measure(self, pose):
-        """Run the chain on one board pose; return (z, R, roll, pitch, range)."""
-        q, t = pose.orientation, pose.position
+        """
+        Run the chain on one PoseWithCovariance; return (z, R, roll, pitch, range).
+
+        R comes from the pose's own covariance, measured live by the pipeline for
+        this frame (FiducialChain.measure). None if that covariance is unusable:
+        a pose is never fused with a made-up noise.
+        """
+        cov = np.array(pose.covariance).reshape(6, 6)
+        if not (np.all(np.isfinite(cov)) and np.all(cov.diagonal() > 0.0)):
+            return None
+        q, t = pose.pose.orientation, pose.pose.position
         t_OM = np.array((t.x, t.y, t.z))
-        x, y, theta, roll, pitch = self.chain.chain(quat_to_rot(q.x, q.y, q.z, q.w), t_OM)
-        d = math.sqrt(t.x * t.x + t.y * t.y + t.z * t.z)
-        var_p = self.chain.sigma_p(d) ** 2
-        return np.array((x, y, theta)), np.diag((var_p, var_p, self.var_th)), roll, pitch, d
+        z, R, roll, pitch = self.chain.measure(quat_to_rot(q.x, q.y, q.z, q.w), t_OM, cov)
+        return z, R, roll, pitch, math.sqrt(t.x * t.x + t.y * t.y + t.z * t.z)
 
     def publish_estimate(self, stamp, t, steps):
         m, ekf = self.est, self.ekf
@@ -211,13 +219,15 @@ class EkfNode(Node):
             self.tf_steps %= self.tf_every
             self.publish_tf(stamp)
 
-    def publish_fix(self, stamp, z, R, roll, pitch, d):
-        m = self.fix
+    def publish_fix(self, stamp, fix, cov_valid, ambiguous):
+        (z, R, roll, pitch, d), m = fix, self.fix
         m.header.stamp = stamp
         m.x, m.y, m.theta = float(z[0]), float(z[1]), float(z[2])
-        m.sigma_p = math.sqrt(R[0, 0])
+        m.covariance = R.ravel()
+        m.covariance_valid = bool(cov_valid)
         m.roll, m.pitch = float(roll), float(pitch)
         m.range = d
+        m.ambiguous = bool(ambiguous)
         self.fix_pub.publish(m)
 
     def publish_tf(self, stamp):

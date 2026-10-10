@@ -10,6 +10,11 @@ The chain is T_TB = T_TM inv(T_CM) inv(T_BC). Two of its three factors never
 change, so FiducialChain builds them once, with every constant axis change
 folded in. Per frame, only inv(T_CM) is formed (a transpose, not an inverse) and
 multiplied in.
+
+Each pose arrives with its own covariance, measured live by the pipeline, and
+measure() carries it through the same chain into R for z, so nothing about the
+camera's noise is fixed at start-up. The range model sigma_p(d), sigma_th is
+kept only for simulating fixes.
 """
 
 import math
@@ -35,8 +40,13 @@ R_MARKER_BOARD = np.array([[0.0, 0.0, -1.0],
                            [0.0, -1.0, 0.0]])
 
 
+def _skew(v):
+    """Return [v]x, the matrix with [v]x w = v x w."""
+    return np.array([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
+
+
 class FiducialChain:
-    """The constant factors of the chain, the per-frame step, and the noise model."""
+    """The constant factors of the chain, the per-frame step, and the simulation noise model."""
 
     def __init__(self, p):
         g, fid = p['geom'], p['fid']
@@ -56,7 +66,7 @@ class FiducialChain:
         # The same two, split into rotation and translation for chain().
         self.R_TM, self.p_TM = self.T_TM[:3, :3].copy(), self.T_TM[:3, 3].copy()
         self.R_OB, self.p_OB = self.T_OB[:3, :3].copy(), self.T_OB[:3, 3].copy()
-        # noise model: sigma_p(d) = sigma_p0 sqrt(1 + d^2 / d0^2); sigma_th is constant
+        # simulation noise model: sigma_p(d) = sigma_p0 sqrt(1 + d^2 / d0^2), sigma_th constant
         self.sigma_p0 = fid['sigma_p0']
         self.inv_d0_sq = 1.0 / fid['d0'] ** 2
         self.sigma_th = math.radians(fid['sigma_th_deg'])
@@ -80,6 +90,43 @@ class FiducialChain:
         return (p[0], p[1], math.atan2(R[1, 0], R[0, 0]),
                 math.atan2(R[2, 1], R[2, 2]), -math.asin(max(-1.0, min(1.0, R[2, 0]))))
 
+    def linearise(self, R_OM, t_OM):
+        """
+        Return (z, roll, pitch, J): the chain at one board pose and its 3x6 Jacobian.
+
+        J maps a perturbation of the board pose, in PoseWithCovariance order and
+        convention (dt, then a small rotation dphi about the optical frame's fixed
+        axes: t_OM + dt, (I + [dphi]x) R_OM), to z = [x, y, theta]. With
+        M = R_TM R_OM' and v = p_OB - t_OM:
+            dp/dt = -M,  dp/dphi = M [v]x,  dtheta/dphi = -w M,
+        where w = [-R20 R00, -R20 R10, R00^2 + R10^2] / (R00^2 + R10^2) is yaw's
+        gradient over a small rotation of R_TB (w = [0, 0, 1] when level).
+        """
+        M = self.R_TM @ R_OM.T
+        R = M @ self.R_OB
+        v = self.p_OB - t_OM
+        p = M @ v + self.p_TM
+        c2 = R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0]
+        w = np.array((-R[2, 0] * R[0, 0] / c2, -R[2, 0] * R[1, 0] / c2, 1.0))
+        J = np.zeros((3, 6))
+        J[:2, :3] = -M[:2]
+        J[:2, 3:] = (M @ _skew(v))[:2]
+        J[2, 3:] = -w @ M
+        z = np.array((p[0], p[1], math.atan2(R[1, 0], R[0, 0])))
+        return (z, math.atan2(R[2, 1], R[2, 2]), -math.asin(max(-1.0, min(1.0, R[2, 0]))), J)
+
+    def measure(self, R_OM, t_OM, pose_cov):
+        """
+        Return (z, R, roll, pitch) from one board pose and its live 6x6 covariance.
+
+        pose_cov is RosInferenceResult.pose.covariance: the pipeline's measured
+        noise for this frame, in PoseWithCovariance order in the optical frame.
+        R = J pose_cov J' (see linearise) is a full 3x3: the x, y and theta
+        errors of a pose are correlated, and the EKF keeps that.
+        """
+        z, roll, pitch, J = self.linearise(R_OM, t_OM)
+        return z, J @ pose_cov @ J.T, roll, pitch
+
     def sigma_p(self, d):
-        """Return the position standard deviation at range d (report Section 2.2)."""
+        """Return the simulated position standard deviation at range d (report Section 2.2)."""
         return self.sigma_p0 * math.sqrt(1.0 + d * d * self.inv_d0_sq)
