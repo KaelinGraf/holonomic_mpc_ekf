@@ -36,7 +36,7 @@ TF_RATE = 20.0
 ZERO_S = 2.0
 
 IMU_QOS = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=10,
-                     reliability=QoSReliabilityPolicy.RELIABLE)
+                     reliability=QoSReliabilityPolicy.BEST_EFFORT)
 POSE_QOS = QoSProfile(history=INFERENCE_RESULT_QOS.history, depth=INFERENCE_RESULT_QOS.depth,
                       reliability=INFERENCE_RESULT_QOS.reliability,
                       durability=QoSDurabilityPolicy.VOLATILE)

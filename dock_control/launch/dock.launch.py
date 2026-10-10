@@ -42,15 +42,17 @@ def _setup(context):
     exposure_offset = float(LaunchConfiguration('exposure_offset').perform(context))
     chain = FiducialChain(params.load(config))
 
-    def node(executable, core, **extra):
+    def node(executable, core, remappings=(), **extra):
         prefix = f'taskset -c {core} chrt -f 50' if rt else None
         return Node(package='dock_control', executable=executable, output='screen',
-                    prefix=prefix, parameters=[{'config': config, **extra}])
+                    prefix=prefix, parameters=[{'config': config, **extra}],
+                    remappings=list(remappings))
 
     return [
         _static_tf('target', 'marker', chain.T_TM),
         _static_tf('base_link', 'pi_camera', se3_inv(chain.T_OB)),
         node('ekf_node', LaunchConfiguration('ekf_core').perform(context),
+             remappings=[('imu/data', LaunchConfiguration('imu_topic').perform(context))],
              exposure_offset=exposure_offset),
         node('mpc_node', LaunchConfiguration('mpc_core').perform(context),
              qp_solver=LaunchConfiguration('qp_solver').perform(context)),
@@ -71,6 +73,8 @@ def generate_launch_description():
                               description='image stamp minus capture time [s] (LED test)'),
         DeclareLaunchArgument('qp_solver', default_value='daqp',
                               description="the MPC's QP solver: daqp or osqp"),
+        DeclareLaunchArgument('imu_topic', default_value='imu/data',
+                              description='the 200 Hz IMU stream the EKF is driven by'),
         DeclareLaunchArgument('record', default_value='true',
                               description='ros2 bag record -a into bags/ (brief Section 11)'),
         OpaqueFunction(function=_setup),
