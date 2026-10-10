@@ -77,6 +77,7 @@ class Ekf:
 
         self.x = np.zeros(5)
         self.P = np.zeros((5, 5))
+        self.t = None
         self.initialised = False
         self.buffer = RingBuffer(round(ekf['buffer_s'] * imu['rate']))
 
@@ -109,16 +110,30 @@ class Ekf:
         self.P[:3, :3] = R
         self.P[3, 3] = self.P[4, 4] = self.sigma_v0_sq
         self.buffer.push(stamp, self.x)
+        self.t = stamp
         self.initialised = True
 
     def predict(self, u, stamp):
-        """Propagate x and P over one IMU sample and buffer the result (report eq. 4)."""
+        """Propagate x and P over one step of T and buffer the result at stamp (report eq. 4)."""
         F, G = self.jacobians(self.x, u)
         self.x = self.f(self.x, u)
         self.x[2] = wrap_pi(self.x[2])
         P = F @ self.P @ F.T + G @ self.Sigma_u @ G.T + self.Q_floor
         self.P = 0.5 * (P + P.T)
         self.buffer.push(stamp, self.x)
+        self.t = stamp
+
+    def advance(self, u, stamp):
+        """Predict in steps of T up to a sample's stamp, holding u; return the steps taken."""
+        n = round((stamp - self.t) / self.T)
+        if n <= 0:
+            return 0
+        steps = min(n, self.buffer.depth)
+        for _ in range(steps):
+            self.predict(u, self.t + self.T)
+        if n > steps:
+            self.t = stamp
+        return steps
 
     def nis(self, z, R, stamp):
         """Return the NIS a fix would have, without applying it (inf before the buffer)."""

@@ -17,12 +17,19 @@ It does two different jobs:
   falling with distance, without changing Output; the verified design and the
   report's results use the two stages.
 
+It also guards the estimate itself: motion starts only with the IMU at its
+configured rate, and any moving stage aborts once the estimate stops arriving
+(a dead IMU node would otherwise leave the MPC steering on a frozen state).
+
 Thresholds are converted to the units the comparisons use once, in __init__.
 """
 
 from dataclasses import dataclass
 import enum
 import math
+
+EST_TIMEOUT_S = 0.1
+IMU_RATE_TOL = 0.1
 
 
 class Stage(enum.IntEnum):
@@ -49,6 +56,8 @@ class Inputs:
     drive_ok: bool = False
     x: object = None
     p_diag: object = None
+    est_age: float = math.inf
+    imu_rate: float = 0.0
     fix_age: float = math.inf
     roll: float = 0.0
     pitch: float = 0.0
@@ -73,6 +82,7 @@ class Supervisor:
     def __init__(self, p):
         sup, lim, tol, mpc = p['sup'], p['lim'], p['tol'], p['mpc']
 
+        self.imu_rate = p['imu']['rate']
         self.standoff_ref = (-sup['standoff'], 0.0, 0.0)
         self.dock_ref = (0.0, 0.0, 0.0)
         self.align_tol_y = sup['align_tol_m']
@@ -111,7 +121,7 @@ class Supervisor:
         elif stage == Stage.IDLE:
             nxt = Stage.ACQUIRE
         elif stage == Stage.ACQUIRE:
-            nxt = Stage.APPROACH if inp.x is not None and inp.drive_ok else stage
+            nxt = Stage.APPROACH if self._ready(inp) else stage
         elif stage in (Stage.APPROACH, Stage.FINAL) and (
                 inp.fix_age > self.hold_after_s or inp.mpc_misses >= 2):
             nxt = Stage.HOLD
@@ -138,11 +148,16 @@ class Supervisor:
         return self.out
 
     def _unsafe(self, inp):
-        """Return whether to abort a moving stage: drive lost, covariance blown, off corridor."""
+        """Return whether to abort a moving stage: drive, estimate, covariance or corridor."""
         off_corridor = (self.off_corridor_since is not None
                         and inp.now - self.off_corridor_since > self.hold_after_s)
-        return (not inp.drive_ok or off_corridor
+        return (not inp.drive_ok or off_corridor or inp.est_age > EST_TIMEOUT_S
                 or inp.p_diag[0] > self.p_abort or inp.p_diag[1] > self.p_abort)
+
+    def _ready(self, inp):
+        """Return whether motion may start: estimate fresh, IMU at its rate, drive armed."""
+        return (inp.x is not None and inp.drive_ok and inp.est_age <= EST_TIMEOUT_S
+                and abs(inp.imu_rate - self.imu_rate) <= IMU_RATE_TOL * self.imu_rate)
 
     def _aligned(self, x):
         """
