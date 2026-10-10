@@ -1,4 +1,4 @@
-"""The fiducial chain: its constant transforms, and the four-pose sign test of brief Section 2."""
+"""The fiducial chain: its constants, the four-pose sign test (brief Section 2), the live R."""
 
 import math
 
@@ -15,6 +15,46 @@ def _board_in_camera(chain, pose):
     """Return T_OM, the board pose the pipeline reports with the robot at (x, y, theta)."""
     x, y, theta = pose
     return chain.T_OB @ se3_inv(se3(rot_z(theta), [x, y, 0.0])) @ chain.T_TM
+
+
+def _rotvec(phi):
+    """Return the rotation matrix of a rotation vector (Rodrigues)."""
+    angle = np.linalg.norm(phi)
+    if angle == 0.0:
+        return np.eye(3)
+    k = phi / angle
+    K = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
+    return np.eye(3) + math.sin(angle) * K + (1.0 - math.cos(angle)) * K @ K
+
+
+@pytest.mark.parametrize('tilt', [0.0, 0.15])
+def test_measurement_jacobian_matches_finite_differences(p, tilt):
+    """The Jacobian of linearise agrees with central differences of the chain, level or tilted."""
+    chain = FiducialChain(p)
+    T_OM = _board_in_camera(chain, (-0.6, 0.08, math.radians(10.0)))
+    R0 = _rotvec(np.array([tilt, -0.5 * tilt, 0.0])) @ T_OM[:3, :3]
+    t0 = T_OM[:3, 3]
+    z0, _, _, J = chain.linearise(R0, t0)
+
+    def z_of(e):
+        return np.array(chain.chain(_rotvec(e[3:]) @ R0, t0 + e[:3])[:3])
+
+    h, I6 = 1e-6, np.eye(6)
+    J_fd = np.column_stack([(z_of(h * I6[i]) - z_of(-h * I6[i])) / (2.0 * h) for i in range(6)])
+    assert np.allclose(z0, z_of(np.zeros(6)))
+    assert np.allclose(J, J_fd, atol=1e-6)
+
+
+def test_pose_covariance_reaches_z_through_the_chain(p):
+    """Square on, the camera's depth noise becomes z's x noise and its sideways noise z's y."""
+    chain = FiducialChain(p)
+    T_OM = _board_in_camera(chain, (-0.5, 0.0, 0.0))
+    depth = np.diag([0.0, 0.0, 1e-4, 0.0, 0.0, 0.0])
+    side = np.diag([1e-4, 0.0, 0.0, 0.0, 0.0, 0.0])
+    _, R_depth, _, _ = chain.measure(T_OM[:3, :3], T_OM[:3, 3], depth)
+    _, R_side, _, _ = chain.measure(T_OM[:3, :3], T_OM[:3, 3], side)
+    assert np.allclose(R_depth, np.diag([1e-4, 0.0, 0.0]), atol=1e-12)
+    assert np.allclose(R_side, np.diag([0.0, 1e-4, 0.0]), atol=1e-12)
 
 
 def test_optical_axes(p):

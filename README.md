@@ -19,6 +19,24 @@ EKF), pinned to its own core with `rt:=true`.
 The launch file also publishes the static transforms `target -> marker` and
 `base_link -> pi_camera`, built from the same constants the EKF uses.
 
+## How it runs
+
+- **ekf_node.** Each IMU message triggers a predict: the filter steps its fixed
+  T over the sample's elapsed time and publishes the estimate (every sample) and,
+  every 10 steps, the transform. Each `inference_result` triggers a correct: the
+  board pose goes through the chain to z, its live covariance through the
+  chain's Jacobian to R, and the update is made against the state buffered at
+  the image's capture time, then applied to the current state; the corrected
+  state goes out with the next IMU sample. Both callbacks share one
+  single-threaded executor, so a predict and a correct never overlap.
+- **mpc_node.** The estimate callback only keeps the newest message. A 20 Hz
+  timer, independent of it, runs the supervisor and then the MPC on that newest
+  estimate (at most one IMU period old) and publishes `cmd_vel`, `dock/stage`
+  and `dock/mpc_info`.
+- **p4p_serial_bridge** subscribes to `cmd_vel`, resends the newest command to
+  the firmware on its own timer (`command_rate_hz`), and sends zeros once it is
+  older than `cmd_timeout`.
+
 ## Layout
 
 ```
@@ -142,6 +160,11 @@ cd /controller_ws && colcon build && source install/setup.bash
   capture stamp on (the brief's `overwrite_from`). Over WiFi the pose delay
   (107 ms median) exceeds the 67 ms fix period, so consecutive fixes overlap and
   would otherwise correct the same error twice.
+- **Measurement noise.** R comes with every pose: the pipeline's live covariance
+  (its measured noise at that range) carried through the chain's Jacobian into a
+  full 3x3 for [x, y, theta]. A pose without a usable covariance is not fused.
+  The brief's range model (`fid.sigma_p0`, `d0`, `sigma_th_deg`) only simulates
+  fixes in the tests. `FiducialFix` logs that R, not two fixed sigmas.
 - **IPPE ambiguity.** When the pipeline flags a pose `ambiguous`, `ekf_node`
   keeps the candidate with the smaller NIS, and never starts the filter from one.
 - **E-stop.** No `/estop` topic: the bridge's `arm` service (false is the software

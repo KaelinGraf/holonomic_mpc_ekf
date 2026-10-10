@@ -10,6 +10,10 @@
 #
 # Write exponents with a sign (5.8e+6, not 5.8e6): YAML 1.1 reads 5.8e6 as a
 # string, and params.load() rejects any value that is not a number.
+#
+# fid.sigma_p0, fid.d0 and fid.sigma_th_deg only simulate fixes (the tests). On
+# the robot each pose's noise comes live with it, in RosInferenceResult's
+# covariance, and ekf_node carries that through the chain into R.
 dock:
   imu:  {rate: 200, sigma_a: 0.02, sigma_r_deg: 0.15, q_scale: 4}
   fid:  {rate: 15, delay_nominal: 0.05, sigma_p0: 0.004, sigma_th_deg: 0.5, d0: 1.0, gate: 100}
