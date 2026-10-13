@@ -68,8 +68,8 @@ class MpcNode(Node):
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', CMD_QOS)
         self.stage_pub = self.create_publisher(DockStage, 'dock/stage', 10)
         self.info_pub = self.create_publisher(MpcInfo, 'dock/mpc_info', 10)
-        # The tick wants the freshest estimate (at most 5 ms old), so take all
-        # 200 Hz and keep the last; a decimated topic would add up to a period of age.
+        # The tick wants the freshest estimate (at most 6.7 ms old), so take all
+        # 150 Hz and keep the last; a decimated topic would add up to a period of age.
         self.create_subscription(DockEstimate, 'dock/estimate', self.on_estimate, 10)
         self.create_subscription(FiducialFix, 'fiducial/fix', self.on_fix, 10)
         self.create_subscription(DriveStatus, 'drive/status', self.on_drive_status, STATUS_QOS)

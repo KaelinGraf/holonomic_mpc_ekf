@@ -52,14 +52,19 @@ def check(p):
     """
     Recompute the derived MPC weights and return the mismatches (empty if consistent).
 
-    Q_y = diag(y_tol^-2, y_tol^-2, theta_tgt^-2) and R_u = diag(du_max^-2) with
-    du_max = T_s [a_max, a_max, alpha_max] (report eq. 15). rho_s is not
-    checked here: it comes from the constraint multipliers of the MATLAB design.
+    Q_y = diag(y_tol^-2, y_tgt^-2, theta_tgt^-2) and R_u = diag(du_max^-2) with
+    du_max = T_s [a_max, a_max, alpha_max] (report eq. 15). The lateral weight
+    comes from the 4 mm docking target, not the 12 mm coupler tolerance the
+    range keeps (2026-10-13): weighted alike, the range error is the larger
+    for nearly the whole approach, so under the L1 speed cap the plan spent the
+    cap on closing the range and left the lateral error until the end. rho_s is
+    not checked here: it comes from the constraint multipliers of the MATLAB
+    design, and r_w is a free tuning weight.
     """
     lim, mpc, tol = p['lim'], p['mpc'], p['tol']
     du_max = [mpc['Ts'] * lim['a_max'], mpc['Ts'] * lim['a_max'], mpc['Ts'] * lim['alpha_max']]
     expected = {
-        'Qy': [tol['y'] ** -2, tol['y'] ** -2, math.radians(tol['tgt_th_deg']) ** -2],
+        'Qy': [tol['y'] ** -2, tol['tgt_y'] ** -2, math.radians(tol['tgt_th_deg']) ** -2],
         'Ru': [d ** -2 for d in du_max],
     }
     mismatches = []

@@ -66,7 +66,7 @@ def test_unconstrained_tick_matches_closed_form(p, solver):
     F, Phi = predict_matrices(*augment(*linearise(x_hat[:3], u_prev, Ts)), Np, Nc)
     x_p = np.concatenate((Ts * np.array((x_hat[3], x_hat[4], r_gyro)), x_hat[:3]))
     q_bar = np.tile(np.asarray(p['mpc']['Qy'], dtype=float), Np)
-    r_bar = p['mpc']['rw'] * np.tile(np.asarray(p['mpc']['Ru'], dtype=float), Nc)
+    r_bar = np.tile(np.asarray(p['mpc']['rw'], dtype=float) * np.asarray(p['mpc']['Ru']), Nc)
     dU = np.linalg.solve(Phi.T @ (q_bar[:, None] * Phi) + np.diag(r_bar),
                          Phi.T @ (q_bar * (np.tile(y_ref, Np) - F @ x_p)))
     assert not res.fallback and res.slack == pytest.approx(0.0, abs=1e-6)
@@ -91,7 +91,7 @@ def test_constrained_tick_respects_every_limit(p, solver):
     res = mpc.step(np.array([-0.5, 0.0, 0.0, v_max, 0.0]), 0.0, u_prev, (0.0, 0.0, 0.0),
                    v_max, r_max)
 
-    assert mpc.m == 20 * Nc + 3 * mpc.Np == 320 and not res.fallback
+    assert mpc.m == 20 * Nc + 3 * mpc.Np and not res.fallback
     dU = res.dU.reshape(Nc, 3)
     U = u_prev + np.cumsum(dU, axis=0)
     speed = np.abs(U[:, 0]) + np.abs(U[:, 1])

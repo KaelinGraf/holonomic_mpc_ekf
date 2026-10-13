@@ -139,10 +139,12 @@ class Mpc:
         self.w_max = lim['w_max']
         # du_max = T_s [a_max, a_max, alpha_max] (report eq. 15)
         self.du_max = self.Ts * np.array([lim['a_max'], lim['a_max'], lim['alpha_max']])
-        # Q_bar = I_Np kron Q_y and R_bar = r_w I_Nc kron R_u are diagonal: keep
-        # the diagonals, so Phi' Q_bar Phi is Phi' (q_bar[:, None] * Phi).
+        # Q_bar = I_Np kron Q_y and R_bar = I_Nc kron diag(r_w) R_u are diagonal: keep
+        # the diagonals, so Phi' Q_bar Phi is Phi' (q_bar[:, None] * Phi). r_w is one
+        # effort weight per axis [u_b, v_b, r_b] (a scalar applies to all three).
         self.q_bar = np.tile(np.asarray(mpc['Qy'], dtype=float), self.Np)
-        self.r_bar = mpc['rw'] * np.tile(np.asarray(mpc['Ru'], dtype=float), self.Nc)
+        self.r_bar = np.tile(np.asarray(mpc['rw'], dtype=float)
+                             * np.asarray(mpc['Ru'], dtype=float), self.Nc)
         self.J_inv = kinematics.ik_matrix(g['Rw'], g['lx'], g['ly'])
         self.A_wheel = np.vstack((self.J_inv, -self.J_inv))     # |J^- u| <= w_max, one step
         self.M_const = self._constant_rows()
