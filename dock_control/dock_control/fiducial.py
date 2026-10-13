@@ -6,20 +6,26 @@ pose costs no extra hop. The input is RosInferenceResult.pose from the
 Conv-ChArT pipeline: the board in the camera's optical frame (frame_id
 pi_camera), from OpenCV's IPPE solve.
 
-The chain is T_TB = T_TM inv(T_CM) inv(T_BC). Two of its three factors never
-change, so FiducialChain builds them once, with every constant axis change
-folded in. Per frame, only inv(T_CM) is formed (a transpose, not an inverse) and
-multiplied in.
+The board's rotation about its own normal (its z axis) is normalised out: only
+the centre's position and the normal's yaw are used. Both are carried into
+base_link and laid onto the ground plane, which gives a normalised board frame:
+at the board centre c (2-D), x along the outward normal's horizontal part (yaw
+phi), z up. That frame is the planar marker of report eq. 5, so
+theta = psi_0 - phi and p = m - R(theta) c place the robot in the target
+frame. A board turned in its own plane by any angle, and whichever lattice
+corner the pipeline numbers first, gives the same pose. m and psi_0 place the
+normalised board frame in the target frame: m the board centre, psi_0 = 180 deg
+its normal pointing back at the docking robot.
 
 Each pose arrives with its own covariance, measured live by the pipeline, and
-measure() carries it through the same chain into R for z, so nothing about the
-camera's noise is fixed at start-up. The range model sigma_p(d), sigma_th is
+measure() carries it through the chain's Jacobian into R for z, so nothing about
+the camera's noise is fixed at start-up. The range model sigma_p(d), sigma_th is
 kept only for simulating fixes.
 """
 
 import math
 
-from dock_control.geometry import rot_z, se3, se3_inv
+from dock_control.geometry import rot_z, se3, se3_inv, wrap_pi
 import numpy as np
 
 # camera_link <- optical frame (pi_camera). Optical: z forward, x right, y down;
@@ -28,21 +34,23 @@ R_LINK_OPTICAL = np.array([[0.0, 0.0, 1.0],
                            [-1.0, 0.0, 0.0],
                            [0.0, -1.0, 0.0]])
 
-# planar marker <- pipeline board. The pipeline's object points are
-# canon_lattice() * square_length with z = 0 (Conv-ChArT-Wireless-Inference
-# src/inference.py): x along the corner columns, y down the rows, so z points
-# into the board. The planar marker frame of the report has x along the face's
-# outward normal (psi_0 = 180 deg points it back at the robot) and z up. This
-# assumes corner 0 is top-left seen from the front: verify it with the four-pose
-# sign test (brief Section 10.b, step 4) before the EKF is switched on.
-R_MARKER_BOARD = np.array([[0.0, 0.0, -1.0],
-                           [1.0, 0.0, 0.0],
-                           [0.0, -1.0, 0.0]])
+# The Jacobian's central-difference step, in metres for the translation and
+# radians for the rotation; the chain is smooth on far larger scales.
+JACOBIAN_STEP = 1e-6
 
 
 def _skew(v):
     """Return [v]x, the matrix with [v]x w = v x w."""
     return np.array([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
+
+
+def _rotation(phi):
+    """Return the rotation matrix of a rotation vector (Rodrigues)."""
+    angle = float(np.linalg.norm(phi))
+    if angle == 0.0:
+        return np.eye(3)
+    K = _skew(phi / angle)
+    return np.eye(3) + math.sin(angle) * K + (1.0 - math.cos(angle)) * K @ K
 
 
 class FiducialChain:
@@ -52,20 +60,28 @@ class FiducialChain:
         g, fid = p['geom'], p['fid']
 
         # --- constant, built once ---
-        # target <- board: the planar marker at m (2-D) with yaw psi_0, both
-        # measured in T, then the board axes. m locates the board frame's origin,
-        # which is the lattice's outer corner (one square beyond corner 0), not
-        # the board centre.
-        T_T_marker = se3(rot_z(math.radians(g['marker_psi0_deg'])),
-                         [g['marker_m'][0], g['marker_m'][1], 0.0])
-        self.T_TM = T_T_marker @ se3(R_MARKER_BOARD, np.zeros(3))
-        # optical <- base: the inverse of base <- camera_link <- optical (the
-        # camera is mounted aligned with the body at cam_xyz), so no static
-        # transform is inverted per frame.
-        self.T_OB = se3_inv(se3(R_LINK_OPTICAL, g['cam_xyz']))
-        # The same two, split into rotation and translation for chain().
-        self.R_TM, self.p_TM = self.T_TM[:3, :3].copy(), self.T_TM[:3, 3].copy()
-        self.R_OB, self.p_OB = self.T_OB[:3, :3].copy(), self.T_OB[:3, 3].copy()
+        # The board centre in the pipeline's board frame. Its inner corners sit at
+        # 1 to n-1 squares from the lattice's outer corner (canon_lattice in the
+        # pipeline's inference.py), so the centre is half the board from it.
+        squares, square = g['board_squares'], g['board_square_m']
+        self.c_M = np.array((0.5 * squares[0] * square, 0.5 * squares[1] * square, 0.0))
+        # target <- normalised board frame (x along the outward normal, z up): at m
+        # with yaw psi_0, both measured in T. Published as the static transform
+        # target -> marker.
+        self.m = np.array(g['marker_m'][:2], dtype=float)
+        self.psi0 = math.radians(g['marker_psi0_deg'])
+        self.T_TM = se3(rot_z(self.psi0), [self.m[0], self.m[1], 0.0])
+        # base <- optical (the camera is mounted aligned with the body at cam_xyz),
+        # and its inverse, which the launch file publishes as a static transform.
+        self.R_BO = R_LINK_OPTICAL
+        self.p_BO = np.array(g['cam_xyz'], dtype=float)
+        self.T_OB = se3_inv(se3(self.R_BO, self.p_BO))
+        # The Jacobian's twelve perturbations, built once: +-h along each optical
+        # axis, and the rotations by +-h about each.
+        h = JACOBIAN_STEP
+        self._dt = [s * h * e for e in np.eye(3) for s in (1.0, -1.0)]
+        self._dR = [_rotation(s * h * e) for e in np.eye(3) for s in (1.0, -1.0)]
+        self._J = np.zeros((3, 6))
         # simulation noise model: sigma_p(d) = sigma_p0 sqrt(1 + d^2 / d0^2), sigma_th constant
         self.sigma_p0 = fid['sigma_p0']
         self.inv_d0_sq = 1.0 / fid['d0'] ** 2
@@ -76,19 +92,33 @@ class FiducialChain:
         Return (x, y, theta, roll, pitch) of base_link in the target frame.
 
         R_OM, t_OM: the board pose in the optical frame, as the pipeline returns
-        it (geometry.quat_to_rot turns its quaternion into R_OM).
+        it (geometry.quat_to_rot turns its quaternion into R_OM). The board's z
+        points into it, away from the camera, so its outward normal is -z.
 
-        T_TB = T_TM inv(T_OM) T_OB, multiplied out so that nothing is inverted:
-        R_TB = R_TM R_OM' R_OB and p_TB = R_TM R_OM' (p_OB - t_OM) + p_TM. Yaw,
-        pitch and roll are the Z-Y-X angles of R_TB; roll and pitch are the
-        monitored channels. With the camera level this is the planar form of
-        report eq. 5: theta_z = psi_0 - psi, p_z = m - R(theta_z)(t + l_c).
+        c = R_BO (R_OM c_M + t_OM) + p_BO is the board centre in base_link and
+        n = -R_BO R_OM e_z its outward normal. The normalised board frame keeps
+        only c's ground-plane position and n's yaw phi = atan2(n_y, n_x), and
+        report eq. 5 gives theta = psi_0 - phi, p = m - R(theta) c. Monitored
+        only: pitch is the normal's elevation above the ground plane (0 for an
+        upright board and a level camera), and roll the board's rotation about
+        its own normal, which is normalised out (any value is fine).
         """
-        R_MO = R_OM.T
-        R = self.R_TM @ R_MO @ self.R_OB
-        p = self.R_TM @ (R_MO @ (self.p_OB - t_OM)) + self.p_TM
-        return (p[0], p[1], math.atan2(R[1, 0], R[0, 0]),
-                math.atan2(R[2, 1], R[2, 2]), -math.asin(max(-1.0, min(1.0, R[2, 0]))))
+        c = self.R_BO @ (R_OM @ self.c_M + t_OM) + self.p_BO
+        n = -(self.R_BO @ R_OM[:, 2])
+        horizontal = math.hypot(n[0], n[1])
+        theta = wrap_pi(self.psi0 - math.atan2(n[1], n[0]))
+        ct, st = math.cos(theta), math.sin(theta)
+        x = self.m[0] - (ct * c[0] - st * c[1])
+        y = self.m[1] - (st * c[0] + ct * c[1])
+        pitch = math.atan2(n[2], horizontal)
+        roll = 0.0
+        if horizontal > 1e-9:
+            # The board's x axis against the viewer's right (z_up x n) and up (n x right).
+            right = np.array((-n[1], n[0], 0.0)) / horizontal
+            up = np.cross(n, right)
+            bx = self.R_BO @ R_OM[:, 0]
+            roll = math.atan2(bx @ up, bx @ right)
+        return x, y, theta, roll, pitch
 
     def linearise(self, R_OM, t_OM):
         """
@@ -96,24 +126,22 @@ class FiducialChain:
 
         J maps a perturbation of the board pose, in PoseWithCovariance order and
         convention (dt, then a small rotation dphi about the optical frame's fixed
-        axes: t_OM + dt, (I + [dphi]x) R_OM), to z = [x, y, theta]. With
-        M = R_TM R_OM' and v = p_OB - t_OM:
-            dp/dt = -M,  dp/dphi = M [v]x,  dtheta/dphi = -w M,
-        where w = [-R20 R00, -R20 R10, R00^2 + R10^2] / (R00^2 + R10^2) is yaw's
-        gradient over a small rotation of R_TB (w = [0, 0, 1] when level).
+        axes: t_OM + dt, exp([dphi]x) R_OM), to z = [x, y, theta]. It is taken
+        by central differences, six pairs of chain evaluations, with theta's
+        differences wrapped.
         """
-        M = self.R_TM @ R_OM.T
-        R = M @ self.R_OB
-        v = self.p_OB - t_OM
-        p = M @ v + self.p_TM
-        c2 = R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0]
-        w = np.array((-R[2, 0] * R[0, 0] / c2, -R[2, 0] * R[1, 0] / c2, 1.0))
-        J = np.zeros((3, 6))
-        J[:2, :3] = -M[:2]
-        J[:2, 3:] = (M @ _skew(v))[:2]
-        J[2, 3:] = -w @ M
-        z = np.array((p[0], p[1], math.atan2(R[1, 0], R[0, 0])))
-        return (z, math.atan2(R[2, 1], R[2, 2]), -math.asin(max(-1.0, min(1.0, R[2, 0]))), J)
+        x, y, theta, roll, pitch = self.chain(R_OM, t_OM)
+        J, inv_2h = self._J, 0.5 / JACOBIAN_STEP
+        for i in range(3):
+            a = self.chain(R_OM, t_OM + self._dt[2 * i])
+            b = self.chain(R_OM, t_OM + self._dt[2 * i + 1])
+            J[0, i], J[1, i] = (a[0] - b[0]) * inv_2h, (a[1] - b[1]) * inv_2h
+            J[2, i] = wrap_pi(a[2] - b[2]) * inv_2h
+            a = self.chain(self._dR[2 * i] @ R_OM, t_OM)
+            b = self.chain(self._dR[2 * i + 1] @ R_OM, t_OM)
+            J[0, 3 + i], J[1, 3 + i] = (a[0] - b[0]) * inv_2h, (a[1] - b[1]) * inv_2h
+            J[2, 3 + i] = wrap_pi(a[2] - b[2]) * inv_2h
+        return np.array((x, y, theta)), roll, pitch, J.copy()
 
     def measure(self, R_OM, t_OM, pose_cov):
         """
