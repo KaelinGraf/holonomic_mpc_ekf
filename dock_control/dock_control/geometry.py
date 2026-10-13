@@ -10,6 +10,7 @@ import math
 import numpy as np
 
 TWO_PI = 2.0 * math.pi
+GRAVITY = 9.80665       # standard gravity [m/s^2]
 
 
 def wrap_pi(a):
@@ -44,6 +45,18 @@ def se3_inv(T):
     Ti[:3, :3] = Rt
     Ti[:3, 3] = -Rt @ T[:3, 3]
     return Ti
+
+
+def body_gravity_xy(x, y, z, w):
+    """
+    Return the x and y an accelerometer at rest reads from gravity, at orientation (x, y, z, w).
+
+    The quaternion maps body to world, z up (sensor_msgs/Imu; the BNO085's game
+    rotation vector, Android's convention), so up in body coordinates is the
+    third row of its matrix: (2(xz - wy), 2(yz + wx), 1 - 2(x^2 + y^2)). Only
+    roll and pitch enter, so a drifting yaw does not matter.
+    """
+    return 2.0 * GRAVITY * (x * z - w * y), 2.0 * GRAVITY * (y * z + w * x)
 
 
 def quat_to_rot(x, y, z, w):

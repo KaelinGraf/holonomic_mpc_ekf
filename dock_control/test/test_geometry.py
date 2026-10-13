@@ -1,8 +1,9 @@
-"""Rigid-body helpers: angle wrapping, rigid inverses and quaternions."""
+"""Rigid-body helpers: angle wrapping, rigid inverses, quaternions and gravity."""
 
 import math
 
-from dock_control.geometry import quat_to_rot, rot_to_quat, rot_z, se3, se3_inv, wrap_pi
+from dock_control.geometry import (body_gravity_xy, GRAVITY, quat_to_rot, rot_to_quat, rot_z, se3,
+                                   se3_inv, wrap_pi)
 import numpy as np
 import pytest
 
@@ -40,3 +41,12 @@ def test_quaternion_round_trip(angles):
     q = rot_to_quat(R)
     assert np.linalg.norm(q) == pytest.approx(1.0)
     assert np.allclose(quat_to_rot(*q), R)
+
+
+@pytest.mark.parametrize('roll, pitch', [(0.0, 0.0), (0.1, 0.0), (0.0, -0.15), (0.2, 0.3)])
+def test_body_gravity_is_what_a_tilted_accelerometer_reads_at_rest(roll, pitch):
+    """Gravity in x and y follows the tilt, and not the yaw (the game vector's drift)."""
+    for yaw in (0.0, 1.0, -2.5):
+        R = _rot(roll, pitch, yaw)                      # body -> world, as sensor_msgs/Imu
+        at_rest = R.T @ [0.0, 0.0, GRAVITY]             # specific force read in the body frame
+        assert np.allclose(body_gravity_xy(*rot_to_quat(R)), at_rest[:2], atol=1e-12)
