@@ -43,10 +43,11 @@ def test_nominal_run_through_the_table(p):
     assert sup.step(_inputs(x=None)).stage == Stage.ACQUIRE
     out = sup.step(_inputs())
     assert out.stage == Stage.APPROACH and out.command_enabled
-    assert out.y_ref == (-0.3, 0.0, 0.0) and out.v_max == p['lim']['v_approach']
+    s0 = p['sup']['standoff']
+    assert out.y_ref == (-s0, 0.0, 0.0) and out.v_max == p['lim']['v_approach']
 
     va, du = p['lim']['v_approach'], p['mpc']['Ts'] * p['lim']['a_max']
-    aligned = np.array([-0.26, 0.009, math.radians(0.9), 0.0, 0.0])
+    aligned = np.array([-s0 + 0.5 * p['sup']['standoff_tol'], 0.009, math.radians(0.9), 0.0, 0.0])
     out = sup.step(_inputs(x=aligned, u_last=np.array([va, 0.0, 0.0])))
     assert out.stage == Stage.FINAL and out.y_ref == (0.0, 0.0, 0.0)
     assert out.v_max == pytest.approx(va - du)
