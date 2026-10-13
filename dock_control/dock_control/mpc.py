@@ -125,7 +125,8 @@ class Mpc:
         self.th_max = math.radians(mpc['th_max_deg'])
         self.w_max = lim['w_max']
         self.du_max = self.Ts * np.array([lim['a_max'], lim['a_max'], lim['alpha_max']])
-        self.q_bar = np.tile(np.asarray(mpc['Qy'], dtype=float), self.Np)
+        q_w = np.asarray(mpc.get('qw', 1.0), dtype=float)
+        self.q_bar = np.tile(q_w * np.asarray(mpc['Qy'], dtype=float), self.Np)
         self.r_bar = np.tile(np.asarray(mpc['rw'], dtype=float)
                              * np.asarray(mpc['Ru'], dtype=float), self.Nc)
         self.J_inv = kinematics.ik_matrix(g['Rw'], g['lx'], g['ly'])

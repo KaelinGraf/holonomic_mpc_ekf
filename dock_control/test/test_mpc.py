@@ -65,7 +65,8 @@ def test_unconstrained_tick_matches_closed_form(p, solver):
 
     F, Phi = predict_matrices(*augment(*linearise(x_hat[:3], u_prev, Ts)), Np, Nc)
     x_p = np.concatenate((Ts * np.array((x_hat[3], x_hat[4], r_gyro)), x_hat[:3]))
-    q_bar = np.tile(np.asarray(p['mpc']['Qy'], dtype=float), Np)
+    q_w = np.asarray(p['mpc'].get('qw', 1.0), dtype=float)
+    q_bar = np.tile(q_w * np.asarray(p['mpc']['Qy'], dtype=float), Np)
     r_bar = np.tile(np.asarray(p['mpc']['rw'], dtype=float) * np.asarray(p['mpc']['Ru']), Nc)
     dU = np.linalg.solve(Phi.T @ (q_bar[:, None] * Phi) + np.diag(r_bar),
                          Phi.T @ (q_bar * (np.tile(y_ref, Np) - F @ x_p)))

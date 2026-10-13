@@ -19,12 +19,17 @@ fiducial/fix goes out for every pose either way.
 An ambiguous pose (two IPPE solutions, docking_design.md 2.3) is not refused.
 Once the filter runs, the solution with the smaller NIS against it is fused, and
 Ekf.update's gate still rejects it if even that one is too far (resolve()). The
-filter starts from one only if its two solutions agree on the planar state to
-within 3 sigma of its own R: the 3-D ambiguity often tilts the board without
-moving x, y or theta. Idle or zeroing, its first solution goes out as the fix. The
-fused solution's noise has the two solutions' disagreement added to it: the
-pipeline's covariance is that of one solution, and on the robot (2026-10-13) an
-ambiguous pose's heading stood still while the gyro saw the robot turning.
+filter starts from the first solution (the smaller reprojection error) of the
+first pose after zeroing, ambiguous or not, and corrects itself with the poses
+that follow (2026-10-13: until then it waited for the two
+solutions to agree, which at range could take ten seconds). The fused
+solution's noise has the two solutions' disagreement added to it: the pipeline's
+covariance is that of one solution, and on the robot (2026-10-13) an ambiguous
+pose's heading stood still while the gyro saw the robot turning. That noise also
+starts the filter wide where the two disagree.
+
+While docking is in ACQUIRE, poses are fused without the NIS gate (2026-10-13): the filter has only just started from what may be the
+wrong one of two solutions, and must be free to move to the right one.
 
 If REANCHOR_AFTER fixes in a row fail the gate yet agree with each other, it is
 the filter that has gone wrong (a bump at the dock, a drift through a run of
@@ -108,6 +113,7 @@ class EkfNode(Node):
         self.tf_msg.child_frame_id = 'base_link'
 
         self.active = False
+        self.acquiring = False
         self.zeroed = False
         self.zero_t0 = None
         self.zero_sum = np.zeros(3)
@@ -172,6 +178,7 @@ class EkfNode(Node):
         elif self.active and not active:
             self.get_logger().info('docking disarmed: the EKF is idle until the next arm')
         self.active = active
+        self.acquiring = msg.stage == DockStage.ACQUIRE
 
     def restart(self):
         """Forget the estimate and the IMU offset: zero again, then initialise from a pose."""
@@ -250,7 +257,8 @@ class EkfNode(Node):
                 self.ekf.initialise(z, R, t_capture)
                 self.last_accept, self.last_accepted = t_capture, True
             return
-        self.last_accepted, self.last_nis = self.ekf.update(z, R, t_capture)
+        self.last_accepted, self.last_nis = self.ekf.update(z, R, t_capture,
+                                                            gate=not self.acquiring)
         if self.last_accepted:
             self.last_accept = t_capture
             self.rejected.clear()
@@ -335,8 +343,7 @@ def resolve(ekf, candidates, ambiguous, t_capture, estimating):
     if estimating and ekf.initialised and len(candidates) > 1:
         nis = [ekf.nis(f[0], f[1], t_capture) for f, _ in candidates]
         fix, cov_valid = candidates[int(nis[1] < nis[0])]
-    may_start = not ambiguous or (len(candidates) > 1 and planar_agree(candidates[0][0],
-                                                                       candidates[1][0]))
+    may_start = True
     if len(candidates) > 1:
         d = candidates[0][0][0] - candidates[1][0][0]
         d[2] = wrap_pi(d[2])

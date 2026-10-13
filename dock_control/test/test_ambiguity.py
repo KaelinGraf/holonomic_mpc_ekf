@@ -46,20 +46,17 @@ def test_the_solution_with_the_smaller_nis_is_fused_and_still_gated(p):
     assert ekf.update(near[0], near[1], t)[0]
 
 
-def test_an_ambiguous_pose_may_start_the_filter_only_if_its_solutions_agree(p):
-    """Agreeing to 3 sigma of the first one's R starts it; 6 deg apart, or one unusable, not."""
+def test_an_ambiguous_pose_starts_the_filter_from_its_first_solution(p):
+    """Agreeing or not, the first solution starts it, wide where the two disagree."""
     ekf = Ekf(p)
     first = _fix(-0.8, 0.05, 3.0)
-    agrees = _fix(-0.8 + 0.003, 0.05, 3.5)
-    disagrees = _fix(-0.8, 0.05, 9.0)
+    disagrees = _fix(-0.8, 0.12, 9.0)
     for estimating in (True, False):
-        chosen, _, may_start = ekf_node.resolve(ekf, [(first, True), (agrees, True)], True, 1.0,
-                                                estimating)
-        assert chosen[0] is first[0] and may_start
         chosen, _, may_start = ekf_node.resolve(ekf, [(first, True), (disagrees, True)], True,
                                                 1.0, estimating)
-        assert chosen[0] is first[0] and not may_start
-    assert not ekf_node.resolve(ekf, [(first, True)], True, 1.0, True)[2]
+        assert chosen[0] is first[0] and may_start
+        assert chosen[1][1, 1] > R[1, 1] + 0.06 ** 2 and chosen[1][2, 2] > math.radians(5.9) ** 2
+    assert ekf_node.resolve(ekf, [(first, True)], True, 1.0, True)[2]
     assert ekf_node.resolve(ekf, [(first, True)], False, 1.0, True)[2]
     assert ekf_node.planar_agree(_fix(0.0, 0.0, 179.9), _fix(0.0, 0.0, -179.9))
 
@@ -110,17 +107,15 @@ def _ambiguous_result(node, turn_alt):
     return msg
 
 
-def test_on_pose_publishes_an_ambiguous_fix_when_idle_and_starts_only_on_agreement(node):
-    """Publish an ambiguous fix when idle; start the filter only from solutions that agree."""
+def test_on_pose_publishes_an_ambiguous_fix_when_idle_and_starts_from_the_first(node):
+    """Publish an ambiguous fix when idle; once armed, start from the first solution."""
     assert isinstance(node.chain, FiducialChain)
     node.on_pose(_ambiguous_result(node, (0.0, 0.0, 0.0)))
     assert len(node.fixes) == 1 and node.fixes[0][1] and not node.ekf.initialised
     node.active = node.zeroed = True
     node.on_pose(_ambiguous_result(node, (0.0, math.radians(8.0), 0.0)))
-    assert not node.ekf.initialised and len(node.fixes) == 2
-    node.on_pose(_ambiguous_result(node, (math.radians(8.0), 0.0, 0.0)))
-    assert node.ekf.initialised
-    assert np.allclose(node.ekf.x[:3], (-0.6, 0.0, 0.0), atol=1e-6)
+    assert node.ekf.initialised and len(node.fixes) == 2
+    assert node.ekf.P[2, 2] > math.radians(1.0) ** 2
 
 
 def test_an_ambiguous_fix_carries_its_solutions_disagreement(p):
@@ -174,3 +169,16 @@ def test_scattered_rejected_fixes_do_not_re_anchor(node):
         y = 0.04 if k % 2 else -0.04
         node.on_pose(_result_at(node, -0.6, y, 0.0, 100.0 + k / 15.0))
     assert node.reanchors == 0 and abs(node.ekf.x[1]) < 0.002
+
+
+def test_while_acquiring_a_pose_is_fused_without_the_gate(node):
+    """In ACQUIRE the filter may move to the other solution; once moving, the gate is back."""
+    node.active = node.zeroed = True
+    node.acquiring = True
+    node.on_pose(_result_at(node, -0.6, 0.0, 0.0, 100.0))
+    node.on_pose(_result_at(node, -0.6, 0.06, 6.0, 100.0 + 1 / 15.0))
+    assert node.last_accepted and node.ekf.x[1] > 0.02
+    node.acquiring = False
+    y = node.ekf.x[1]
+    node.on_pose(_result_at(node, -0.6, y - 0.06, -6.0, 100.0 + 2 / 15.0))
+    assert not node.last_accepted and abs(node.ekf.x[1] - y) < 0.002

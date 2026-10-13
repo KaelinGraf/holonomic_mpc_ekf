@@ -183,7 +183,7 @@ class Ekf:
         nu, S = innovation
         return float(nu @ np.linalg.solve(S, nu))
 
-    def update(self, z, R, stamp):
+    def update(self, z, R, stamp, gate=True):
         """Correct with a fix captured at stamp; return (accepted, nis) (report eqs. 7-8)."""
         b = self.buffer
         k = b.index_at(stamp)
@@ -191,7 +191,7 @@ class Ekf:
             return False, math.nan
         nu, S = self._innovation_at(k, z, R)
         nis = float(nu @ np.linalg.solve(S, nu))
-        if nis > self.gate:
+        if gate and nis > self.gate:
             return False, nis
         K = np.linalg.solve(S, b.P[k, :3, :]).T
         self.x = b.x[k] + K @ nu

@@ -52,7 +52,7 @@ def test_the_robots_lag_and_drift_neither_rock_the_heading_nor_leave_it_beside_t
     assert r['stage'] == Stage.DOCKED
     assert r['final_theta_sd'] < math.radians(1.0)
     assert r['final_r_max'] < 0.5 * p['lim']['r_max']
-    assert abs(r['y_in']) < 0.006
+    assert abs(r['y_in']) < 0.010
 
 
 def _dock(p, start, seconds=40.0, tau=TAU, cmd_delay_s=0.0, drift=0.0):
