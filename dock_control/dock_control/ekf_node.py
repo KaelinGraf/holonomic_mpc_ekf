@@ -19,12 +19,18 @@ fiducial/fix goes out for every pose either way.
 An ambiguous pose (two IPPE solutions, docking_design.md 2.3) is not refused.
 Once the filter runs, the solution with the smaller NIS against it is fused, and
 Ekf.update's gate still rejects it if even that one is too far (resolve()). The
-filter starts from one only if its two solutions agree on the planar state to
-within 3 sigma of its own R: the 3-D ambiguity often tilts the board without
-moving x, y or theta. Idle or zeroing, its first solution goes out as the fix. The
-fused solution's noise has the two solutions' disagreement added to it: the
-pipeline's covariance is that of one solution, and on the robot (2026-10-13) an
-ambiguous pose's heading stood still while the gyro saw the robot turning.
+filter starts from the first solution (the smaller reprojection error) of the
+first pose after zeroing, ambiguous or not, and corrects itself with the poses
+that follow (the user's decision, 2026-10-13: until then it waited for the two
+solutions to agree, which at range could take ten seconds). The fused
+solution's noise has the two solutions' disagreement added to it: the pipeline's
+covariance is that of one solution, and on the robot (2026-10-13) an ambiguous
+pose's heading stood still while the gyro saw the robot turning. That noise also
+starts the filter wide where the two disagree.
+
+While docking is in ACQUIRE, poses are fused without the NIS gate (the user's
+decision, 2026-10-13): the filter has only just started from what may be the
+wrong one of two solutions, and must be free to move to the right one.
 
 If REANCHOR_AFTER fixes in a row fail the gate yet agree with each other, it is
 the filter that has gone wrong (a bump at the dock, a drift through a run of
@@ -70,7 +76,7 @@ from tf2_ros import TransformBroadcaster
 TF_RATE = 20.0      # Hz, target -> base_link (brief Section 3)
 ZERO_S = 2.0        # s of stationary IMU averaged into the accelerometer offset (brief Section 5)
 RATE_TOL = 0.1      # warn when the measured IMU rate is below the configured one by more
-AGREE_SIGMAS = 3.0  # an ambiguous pose may start the filter if its solutions agree to this
+AGREE_SIGMAS = 3.0  # planar_agree: an ambiguous pose's solutions agree to this (diagnostic)
 # Re-anchoring: this many fixes in a row failing the gate but agreeing with each other (each
 # within REANCHOR_P and REANCHOR_TH_DEG of the one before) mean the filter, not the camera,
 # has gone wrong; the filter restarts from the newest of them instead of drifting on.
@@ -125,6 +131,7 @@ class EkfNode(Node):
 
         # --- state ---
         self.active = False                     # docking armed: the filter runs
+        self.acquiring = False                  # dock/stage is ACQUIRE: fuse without the gate
         self.zeroed = False
         self.zero_t0 = None                     # first stamp of the zeroing window
         self.zero_sum = np.zeros(3)             # sums of a_x, a_y and r while zeroing
@@ -189,6 +196,7 @@ class EkfNode(Node):
         elif self.active and not active:
             self.get_logger().info('docking disarmed: the EKF is idle until the next arm')
         self.active = active
+        self.acquiring = msg.stage == DockStage.ACQUIRE
 
     def restart(self):
         """Forget the estimate and the IMU offset: zero again, then initialise from a pose."""
@@ -273,7 +281,8 @@ class EkfNode(Node):
                 self.ekf.initialise(z, R, t_capture)
                 self.last_accept, self.last_accepted = t_capture, True
             return
-        self.last_accepted, self.last_nis = self.ekf.update(z, R, t_capture)
+        self.last_accepted, self.last_nis = self.ekf.update(z, R, t_capture,
+                                                            gate=not self.acquiring)
         if self.last_accepted:
             self.last_accept = t_capture
             self.rejected.clear()
@@ -367,17 +376,16 @@ def resolve(ekf, candidates, ambiguous, t_capture, estimating):
     candidates: [(fix, cov_valid)], the pipeline's first solution (the smaller
     reprojection error) first, a second only when the pose is ambiguous and both
     have a usable covariance. With the filter running, the one with the smaller
-    NIS at the capture stamp; Ekf.update still gates it. Otherwise the first, and
-    may_start says whether it may initialise the filter: always for an
-    unambiguous pose, and for an ambiguous one only when both solutions are
-    usable and agree on the planar state (planar_agree).
+    NIS at the capture stamp; Ekf.update still gates it. Otherwise the first, which
+    may always initialise the filter (may_start is True): an ambiguous pose starts
+    it from its first solution, with the disagreement in its noise, and the poses
+    that follow correct it.
     """
     fix, cov_valid = candidates[0]
     if estimating and ekf.initialised and len(candidates) > 1:
         nis = [ekf.nis(f[0], f[1], t_capture) for f, _ in candidates]
         fix, cov_valid = candidates[int(nis[1] < nis[0])]
-    may_start = not ambiguous or (len(candidates) > 1 and planar_agree(candidates[0][0],
-                                                                       candidates[1][0]))
+    may_start = True
     if len(candidates) > 1:
         # An ambiguous pose fits two boards almost equally well, which its own covariance
         # does not say: where the two solutions disagree, that disagreement is added to

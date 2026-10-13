@@ -55,14 +55,15 @@ def test_the_robots_lag_and_drift_neither_rock_the_heading_nor_leave_it_beside_t
     It drifted right by about 15 % of its forward speed. With the design's effort weight
     (rw 1.0) and the lateral error weighted like the range, this plant rocked the heading
     +-3 deg with r_b swinging at r_max, as the robot did, and arrived up to 45 mm beside
-    the dock. Now: no limit cycle once FINAL has settled, and on the centre line when
-    50 mm out.
+    the dock. Now: no limit cycle once FINAL has settled, and within 10 mm of the centre
+    line when 50 mm out (about 7 mm with turning at rw 64; 2-3 mm at 1024, which arced
+    on the robot).
     """
     r = _dock(p, start, seconds=60.0, tau=0.15, cmd_delay_s=0.05, drift=-0.15)
     assert r['stage'] == Stage.DOCKED
     assert r['final_theta_sd'] < math.radians(1.0)
     assert r['final_r_max'] < 0.5 * p['lim']['r_max']
-    assert abs(r['y_in']) < 0.006
+    assert abs(r['y_in']) < 0.010
 
 
 def _dock(p, start, seconds=40.0, tau=TAU, cmd_delay_s=0.0, drift=0.0):
