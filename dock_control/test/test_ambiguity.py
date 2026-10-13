@@ -1,5 +1,7 @@
 """
-IPPE ambiguity in ekf_node: the solution with the smaller NIS is fused; one that agrees may start.
+IPPE ambiguity in ekf_node: the solution with the smaller NIS is fused.
+
+Once it passes the gate it carries its own covariance only; the first solution starts the filter.
 
 resolve() on its own, then ekf_node.on_pose with real board poses through the chain. Needs the
 messages ekf_node imports (rclpy, dock_msgs, convchart_interfaces); skipped without them. The
@@ -43,22 +45,23 @@ def test_the_solution_with_the_smaller_nis_is_fused_and_still_gated(p):
     assert chosen[0] is near[0] and valid is False
     chosen, valid, _ = ekf_node.resolve(ekf, [(near, True), (far, False)], True, t, True)
     assert chosen[0] is near[0] and valid is True
+    assert np.allclose(chosen[1], R)                    # its own covariance, nothing added
     assert not ekf.update(far[0], far[1], t)[0]     # NIS (6 / 0.3)^2 = 400, over the gate
     assert ekf.update(near[0], near[1], t)[0]
 
 
 def test_an_ambiguous_pose_starts_the_filter_from_its_first_solution(p):
-    """Agreeing or not, the first solution starts it, wide where the two disagree."""
+    """Agreeing or not, the first solution starts it; the spread says where the two disagree."""
     ekf = Ekf(p)
     first = _fix(-0.8, 0.05, 3.0)
     disagrees = _fix(-0.8, 0.12, 9.0)
     for estimating in (True, False):
-        chosen, _, may_start = ekf_node.resolve(ekf, [(first, True), (disagrees, True)], True,
-                                                1.0, estimating)
-        assert chosen[0] is first[0] and may_start
-        assert chosen[1][1, 1] > R[1, 1] + 0.06 ** 2 and chosen[1][2, 2] > math.radians(5.9) ** 2
-    assert ekf_node.resolve(ekf, [(first, True)], True, 1.0, True)[2]
-    assert ekf_node.resolve(ekf, [(first, True)], False, 1.0, True)[2]
+        chosen, _, spread = ekf_node.resolve(ekf, [(first, True), (disagrees, True)], True,
+                                             1.0, estimating)
+        assert chosen[0] is first[0] and np.allclose(chosen[1], R)
+        assert spread[1, 1] > 0.06 ** 2 and spread[2, 2] > math.radians(5.9) ** 2
+    assert not np.any(ekf_node.resolve(ekf, [(first, True)], True, 1.0, True)[2])
+    assert not np.any(ekf_node.resolve(ekf, [(first, True)], False, 1.0, True)[2])
     assert ekf_node.planar_agree(_fix(0.0, 0.0, 179.9), _fix(0.0, 0.0, -179.9))   # wrapped
 
 
@@ -124,15 +127,39 @@ def test_on_pose_publishes_an_ambiguous_fix_when_idle_and_starts_from_the_first(
     assert node.ekf.P[2, 2] > math.radians(1.0) ** 2                 # their disagreement
 
 
-def test_an_ambiguous_fix_carries_its_solutions_disagreement(p):
-    """The fused solution's noise gains the squared gap between the two solutions."""
+def test_an_ambiguous_fix_keeps_its_own_noise_and_reports_the_disagreement(p):
+    """The chosen solution keeps its own covariance; the squared gap comes back on its own."""
     ekf = _running(p)
     a, b = _fix(-0.5, 0.0, 0.0), _fix(-0.48, 0.0, 5.0)
-    fix, _, _ = ekf_node.resolve(ekf, [(a, True), (b, True)], True, 10 / 150.0, True)
+    fix, _, spread = ekf_node.resolve(ekf, [(a, True), (b, True)], True, 10 / 150.0, True)
     gap = np.array([0.02, 0.0, math.radians(5.0)])
-    assert np.allclose(fix[1], R + np.diag(gap * gap))
-    single, _, _ = ekf_node.resolve(ekf, [(a, True)], False, 10 / 150.0, True)
-    assert np.allclose(single[1], R)                    # one solution: its own noise only
+    assert np.allclose(fix[1], R) and np.allclose(spread, np.diag(gap * gap))
+    single, _, spread = ekf_node.resolve(ekf, [(a, True)], False, 10 / 150.0, True)
+    assert np.allclose(single[1], R) and not np.any(spread)     # one solution: no spread
+
+
+def test_a_gated_ambiguous_solution_is_fused_with_its_own_covariance(node):
+    """
+    Once moving, the solution that passes the gate is fused with its own covariance.
+
+    The user, 2026-10-14: "IF A SOLUTION PASSES THE INNOVATION TEST, IT SHOULD NOT
+    HAVE ANY EXTRA UNCERTAINTY". The first pose still starts the filter wide.
+    """
+    node.active = node.zeroed = True
+    node.on_pose(_ambiguous_result(node, (0.0, math.radians(8.0), 0.0)))   # starts the filter
+    assert node.ekf.P[2, 2] > math.radians(1.0) ** 2                       # wide: untested
+    seen, update = [], node.ekf.update
+
+    def spy(z, R_fix, t, gate=True):
+        seen.append((R_fix.copy(), gate))
+        return update(z, R_fix, t, gate=gate)
+    node.ekf.update = spy
+    msg = _ambiguous_result(node, (0.0, math.radians(8.0), 0.0))
+    msg.header.stamp.nanosec = 66_666_667
+    node.on_pose(msg)
+    R_used, gated = seen[-1]
+    assert gated and node.last_accepted
+    assert np.allclose(R_used, node.fixes[-1][0][1])                       # no spread added
 
 
 def test_fixes_agree_compares_each_with_the_one_before():
