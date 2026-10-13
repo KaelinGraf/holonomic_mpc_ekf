@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>p4p_bringup</name>
+  <version>0.0.1</version>
+  <description>The Pi's ordered bring-up: camera and IMU, then the Arduino bridge, then dock_control</description>
+  <maintainer email="dev@todo.todo">dev</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>p4p_camera</exec_depend>
+  <exec_depend>p4p_imu</exec_depend>
+  <exec_depend>p4p_serial_bridge</exec_depend>
+  <exec_depend>dock_control</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>rosidl_runtime_py</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>convchart_interfaces</exec_depend>
+
+  <test_depend>convchart_qos</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
