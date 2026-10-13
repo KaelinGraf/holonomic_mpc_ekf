@@ -22,11 +22,15 @@ Ekf.update's gate still rejects it if even that one is too far (resolve()). The
 filter starts from the first solution (the smaller reprojection error) of the
 first pose after zeroing, ambiguous or not, and corrects itself with the poses
 that follow (2026-10-13: until then it waited for the two
-solutions to agree, which at range could take ten seconds). The fused
-solution's noise has the two solutions' disagreement added to it: the pipeline's
-covariance is that of one solution, and on the robot (2026-10-13) an ambiguous
-pose's heading stood still while the gyro saw the robot turning. That noise also
-starts the filter wide where the two disagree.
+solutions to agree, which at range could take ten seconds).
+
+A solution that passes the innovation test is fused with its own covariance and
+nothing more (2026-10-14). Until then every ambiguous solution
+had the two solutions' disagreement added to its noise, and on the robot those
+fixes barely moved the estimate while it drifted 6 cm from them (2026-10-13, as
+the robot lined up head-on). The disagreement is still added where no test
+vouches for the solution: the first pose, poses fused in ACQUIRE, and the fix a
+re-anchor restarts from, so the filter starts wide where the two disagree.
 
 While docking is in ACQUIRE, poses are fused without the NIS gate (2026-10-13): the filter has only just started from what may be the
 wrong one of two solutions, and must be free to move to the right one.
@@ -246,24 +250,27 @@ class EkfNode(Node):
                                       throttle_duration_sec=5.0)
             return
         estimating = self.active and self.zeroed
-        fix, cov_valid, may_start = resolve(self.ekf, candidates, msg.ambiguous, t_capture,
-                                            estimating)
+        fix, cov_valid, spread = resolve(self.ekf, candidates, msg.ambiguous, t_capture,
+                                         estimating)
         z, R = fix[0], fix[1]
+        R_untested = R + spread
         self.publish_fix(stamp, fix, cov_valid, msg.ambiguous)
         if not estimating:
             return
         if not self.ekf.initialised:
-            if may_start:
-                self.ekf.initialise(z, R, t_capture)
-                self.last_accept, self.last_accepted = t_capture, True
+            self.ekf.initialise(z, R_untested, t_capture)
+            self.last_accept, self.last_accepted = t_capture, True
             return
-        self.last_accepted, self.last_nis = self.ekf.update(z, R, t_capture,
-                                                            gate=not self.acquiring)
+        if self.acquiring:
+            self.last_accepted, self.last_nis = self.ekf.update(z, R_untested, t_capture,
+                                                                gate=False)
+        else:
+            self.last_accepted, self.last_nis = self.ekf.update(z, R, t_capture, gate=True)
         if self.last_accepted:
             self.last_accept = t_capture
             self.rejected.clear()
         elif not math.isnan(self.last_nis):
-            self.rejected.append((t_capture, z, R))
+            self.rejected.append((t_capture, z, R_untested))
             if (len(self.rejected) == REANCHOR_AFTER
                     and fixes_agree([f[1] for f in self.rejected], REANCHOR_P,
                                     math.radians(REANCHOR_TH_DEG))):
@@ -338,17 +345,17 @@ def planar_agree(a, b, sigmas=AGREE_SIGMAS):
 
 
 def resolve(ekf, candidates, ambiguous, t_capture, estimating):
-    """Pick the fix among a pose's usable solutions; return (fix, cov_valid, may_start)."""
+    """Pick the fix among a pose's usable solutions; return (fix, cov_valid, spread)."""
     fix, cov_valid = candidates[0]
     if estimating and ekf.initialised and len(candidates) > 1:
         nis = [ekf.nis(f[0], f[1], t_capture) for f, _ in candidates]
         fix, cov_valid = candidates[int(nis[1] < nis[0])]
-    may_start = True
+    spread = np.zeros((3, 3))
     if len(candidates) > 1:
         d = candidates[0][0][0] - candidates[1][0][0]
         d[2] = wrap_pi(d[2])
-        fix = (fix[0], fix[1] + np.diag(d * d), *fix[2:])
-    return fix, cov_valid, may_start
+        spread = np.diag(d * d)
+    return fix, cov_valid, spread
 
 
 def fixes_agree(zs, tol_p, tol_th):
