@@ -47,7 +47,7 @@ def check(p):
     lim, mpc, tol = p['lim'], p['mpc'], p['tol']
     du_max = [mpc['Ts'] * lim['a_max'], mpc['Ts'] * lim['a_max'], mpc['Ts'] * lim['alpha_max']]
     expected = {
-        'Qy': [tol['y'] ** -2, tol['y'] ** -2, math.radians(tol['tgt_th_deg']) ** -2],
+        'Qy': [tol['y'] ** -2, tol['tgt_y'] ** -2, math.radians(tol['tgt_th_deg']) ** -2],
         'Ru': [d ** -2 for d in du_max],
     }
     mismatches = []

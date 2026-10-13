@@ -126,7 +126,8 @@ class Mpc:
         self.w_max = lim['w_max']
         self.du_max = self.Ts * np.array([lim['a_max'], lim['a_max'], lim['alpha_max']])
         self.q_bar = np.tile(np.asarray(mpc['Qy'], dtype=float), self.Np)
-        self.r_bar = mpc['rw'] * np.tile(np.asarray(mpc['Ru'], dtype=float), self.Nc)
+        self.r_bar = np.tile(np.asarray(mpc['rw'], dtype=float)
+                             * np.asarray(mpc['Ru'], dtype=float), self.Nc)
         self.J_inv = kinematics.ik_matrix(g['Rw'], g['lx'], g['ly'])
         self.A_wheel = np.vstack((self.J_inv, -self.J_inv))
         self.M_const = self._constant_rows()

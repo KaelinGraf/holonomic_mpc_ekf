@@ -1,4 +1,51 @@
-# Demonstrator parameters, mirroring dock_params('demo') exactly (brief Section 9).
+# Demonstrator parameters, mirroring dock_params('demo') exactly (brief Section 9),
+# except geom, measured on the robot (2026-10-13), and four IMU values.
+# - geom: wheel centres 153 mm (x) by 178 mm (y), so lx 76.5 and ly 89 mm; wheel
+#   diameter 55 mm at the rollers; camera lens 70 mm ahead of base_link, on the
+#   centre line (its height, 0.08, is still a guess). The robot's coupler is 201 mm
+#   ahead of base_link (76 + 125) and meets the dock's, 125 mm in front of the
+#   board, at x = 0, so the board plane is 0.326 m out. The dock's coupler is on
+#   the board's centre line, so marker_m, the board centre in the target frame,
+#   is (0.326, 0). The board is 5 x 5 squares of 24 mm, which puts its centre
+#   (2.5, 2.5) squares from the lattice's outer corner. Its rotation about its
+#   own normal is normalised out (fiducial.FiducialChain): only the centre's
+#   position and the normal's yaw are used, so it may be mounted at any rotation.
+# - imu.rate (150) is the robot IMU's nominal rate, which the supervisor only uses
+#   for its start check.
+# - ekf.step_s (5 ms) is the MATLAB design's fixed step (its 200 Hz). The EKF steps
+#   each sample's own interval in steps near it, and the ekf floors are per step_s.
+# - lim: the speed limits are 60% of the design's (2026-10-13):
+#   v_approach 0.30 -> 0.18 m/s, v_final 0.05 -> 0.03 m/s, r_max 0.5 -> 0.30 rad/s and
+#   w_max 15 -> 9 rad/s. The accelerations, from which mpc.Ru is derived, are unchanged.
+# - ekf.zupt_*: once cmd_vel has been zero for zupt_settle_s, the EKF holds the velocity at
+#   zero (sigma zupt_sigma_v), and lets the pose random-walk by zupt_q_p and zupt_q_th_deg
+#   per root second, so a board moved by hand moves the pose, not the velocity.
+# - mpc.th_max_deg is 180: the heading corridor is off (2026-10-13,
+#   so that the robot can start far off the board's normal). The heading is still in the
+#   cost (Qy's theta weight, from tol.tgt_th_deg), which pulls it into line with the
+#   board; the corridor's exact-penalty slack made it all but hard. The no-penetration
+#   row (contact_band) keeps the slack.
+# - mpc.Np is 80 (a 4 s horizon), up from the design's 40 (2 s)
+#   (2026-10-13). The closed-loop test docks at 40, 80 and 120; a step solves in about
+#   0.7 ms on the laptop at 80 (1.5 ms p99), about 2.8 times that on the Pi.
+# - mpc.rw and mpc.Qy's lateral weight (2026-10-13, after the robot's runs that day):
+#   - rw is an effort weight per axis [u_b, v_b, r_b] on the increments, multiplying the
+#     derived Ru. At the design's 1.0 the tracking cost summed over the 80-step horizon
+#     outweighed it by about 300 to 1, so each tick planned a time-optimal turn (r_b
+#     driven at alpha_max to r_max and back); the wheels' lag of about 0.2 s (0.15 s
+#     time constant and 50 ms to the motors) then overshot every time, a heading limit
+#     cycle of about +-4 deg, r_b swinging +-0.30 rad/s, about 1.4 s a period. 16 on the
+#     translation and 1024 (16 x 64) on turning take it out in simulation with that lag
+#     (theta sd 2 -> 0.1-0.7 deg) at about the same docking time.
+#   - Qy's lateral weight is tol.tgt_y^-2 (62500) instead of tol.y^-2 (6944): see
+#     params.check. With the range and lateral errors weighted alike, the L1 speed cap
+#     went to the range first; on the robot a sideways drift while driving in was left
+#     until the coupler (53 mm off at x = -40 mm), where 0.03 m/s could not strafe it.
+#     In simulation with the lag, that drift and the 40 deg camera field of view, the
+#     robot now arrives within 5 mm of the centre line and keeps the board in view.
+# - imu.sigma_a and imu.sigma_r_deg were measured on the robot (2026-10-13: the
+#   standard deviation of 60 s at rest, at 150 Hz) and replace the bench values
+#   0.02 m/s^2 and 0.15 deg/s.
 #
 # The one parameter file: every node and every test reads it through
 # dock_control.params, and no other file holds a number. Values marked "bench" or
@@ -15,11 +62,13 @@
 # the robot each pose's noise comes live with it, in RosInferenceResult's
 # covariance, and ekf_node carries that through the chain into R.
 dock:
-  imu:  {rate: 200, sigma_a: 0.02, sigma_r_deg: 0.15, q_scale: 4}
+  imu:  {rate: 150, sigma_a: 0.022, sigma_r_deg: 0.026, q_scale: 4}
   fid:  {rate: 15, delay_nominal: 0.05, sigma_p0: 0.004, sigma_th_deg: 0.5, d0: 1.0, gate: 100}
-  ekf:  {q_v: 4.5e-6, q_th: 3.8e-9, p_floor: 1.0e-8, sigma_v0: 0.1, buffer_s: 0.5}
-  geom: {Rw: 0.0508, lx: 0.15, ly: 0.15, Lk: 0.15, cam_xyz: [0.10, 0.0, 0.08], marker_m: [0.30, 0.0], marker_psi0_deg: 180}
-  lim:  {v_approach: 0.30, v_final: 0.05, a_max: 0.5, r_max: 0.5, alpha_max: 1.0, w_max: 15.0}
-  mpc:  {Ts: 0.05, Np: 40, Nc: 10, rw: 1.0, contact_band: 0.010, th_max_deg: 20, Qy: [6944, 6944, 1459], Ru: [1600, 1600, 400], rho_s: 5.8e+6}
+  ekf:  {q_v: 4.5e-6, q_th: 3.8e-9, p_floor: 1.0e-8, sigma_v0: 0.1, buffer_s: 0.5, step_s: 0.005, zupt_settle_s: 0.3, zupt_sigma_v: 0.005,
+         zupt_q_p: 0.05, zupt_q_th_deg: 10.0}
+  geom: {Rw: 0.0275, lx: 0.0765, ly: 0.089, Lk: 0.201, cam_xyz: [0.070, 0.0, 0.08], marker_m: [0.326, 0.0], marker_psi0_deg: 180,
+         board_squares: [5, 5], board_square_m: 0.024}
+  lim:  {v_approach: 0.18, v_final: 0.03, a_max: 0.5, r_max: 0.30, alpha_max: 1.0, w_max: 9.0}
+  mpc:  {Ts: 0.05, Np: 80, Nc: 10, rw: [16, 16, 1024], contact_band: 0.010, th_max_deg: 180, Qy: [6944, 62500, 1459], Ru: [1600, 1600, 400], rho_s: 5.8e+6}
   sup:  {standoff: 0.30, align_tol_m: 0.010, align_tol_deg: 1.0, standoff_tol: 0.05, dock_tol: 0.003, dock_vtol: 0.02, hold_after_s: 0.5, abort_after_s: 2.0}
   tol:  {y: 0.012, th_deg: 20, tgt_y: 0.004, tgt_th_deg: 1.5}
