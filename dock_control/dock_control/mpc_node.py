@@ -114,7 +114,7 @@ class MpcNode(Node):
 
         t0 = time.perf_counter()
         res = self.mpc.step(est.x, est.r_gyro, self.u_prev, out.y_ref, out.v_max, out.r_max,
-                            out.qw)
+                            out.qw, out.l1_cap)
         solve_ms = (time.perf_counter() - t0) * 1e3
         late = solve_ms > SOLVE_BUDGET_MS
         inp.mpc_misses = inp.mpc_misses + 1 if res.fallback or late else 0

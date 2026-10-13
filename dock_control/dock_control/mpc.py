@@ -45,13 +45,20 @@ DAQP_SOLVED = (1, 2)        # exitflag: optimal, soft optimal
 INF = 1e30                  # what both solvers read as no bound
 SLACK_WEIGHT = 2e2          # E_ext = blkdiag(E, 2e2) (brief Section 6, step 6)
 
-# Amplitude rows for one step u = [u_b, v_b, r_b]: each axis capped on its own,
-# |u_b| <= v_max and |v_b| <= v_max, then |r_b| <= r_max. The user's choice
-# (2026-10-14) over the brief's L1 cap |u_b| + |v_b| <= v_max, under which the
-# plan spent the whole cap on one axis, strafing at full speed with no forward
-# motion. The wheel-speed rows (w_max) still bound a diagonal move.
-A_AMP = np.array([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0],
-                  [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]])
+# Amplitude rows for one step u = [u_b, v_b, r_b], in two shapes the supervisor
+# picks per stage (Output.l1_cap), then |r_b| <= r_max in both:
+# - per axis, |u_b| <= v_max and |v_b| <= v_max: APPROACH. The user's choice
+#   (2026-10-14) over the brief's L1 cap, under which the plan spent the whole
+#   cap on one axis, strafing at full speed with no forward motion.
+# - L1, the four facets of |u_b| + |v_b| <= v_max: FINAL and HOLD. Per axis there,
+#   the robot could strafe at the full v_final while driving in, and with the
+#   wheels' lag it hunted sideways at the dock in simulation from every real
+#   start of 2026-10-13 (mpc_policy_study in the report notes).
+# The wheel-speed rows (w_max) bound a diagonal move under either.
+A_AMP_AXIS = np.array([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0],
+                       [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]])
+A_AMP_L1 = np.array([[1.0, 1.0, 0.0], [1.0, -1.0, 0.0], [-1.0, 1.0, 0.0], [-1.0, -1.0, 0.0],
+                     [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]])
 
 
 def f_c(x_c, u, Ts):
@@ -154,10 +161,14 @@ class Mpc:
                              * np.asarray(mpc['Ru'], dtype=float), self.Nc)
         self.J_inv = kinematics.ik_matrix(g['Rw'], g['lx'], g['ly'])
         self.A_wheel = np.vstack((self.J_inv, -self.J_inv))     # |J^- u| <= w_max, one step
-        self.M_const = self._constant_rows()
+        self.M_const = self._constant_rows(A_AMP_AXIS)
         # Row blocks of M: increments, amplitudes, wheel speeds, then the soft
         # output rows (no penetration, heading corridor up, heading corridor down).
         self.amp = slice(2 * n, 2 * n + 6 * self.Nc)
+        # the amplitude block in either shape; A_ext holds the one step() was last asked for
+        self.M_amp = {False: self.M_const[self.amp].copy(),
+                      True: self._constant_rows(A_AMP_L1)[self.amp]}
+        self.l1 = False
         self.wheel = slice(self.amp.stop, self.M_const.shape[0])
         k = self.wheel.stop
         self.pen = slice(k, k + self.Np)
@@ -196,7 +207,7 @@ class Mpc:
         # --- state: the last solution [dU; s], for OSQP's warm start ---
         self.z_prev = None
 
-    def _constant_rows(self):
+    def _constant_rows(self, a_amp):
         """
         Return rows 0-199 of M, the 200 x 3Nc block whose left-hand side never changes.
 
@@ -204,18 +215,20 @@ class Mpc:
         U = C1 u(k-1) + C2 dU (report Section 3.4):
 
             increments    |du(k+j)| <= du_max                    6 Nc rows
-            amplitudes    |u_b| <= v_max, |v_b| <= v_max
-                          and |r_b| <= r_max, on C2 dU           6 Nc rows
+            amplitudes    a_amp: |u_b|, |v_b| <= v_max per axis
+                          or |u_b| + |v_b| <= v_max (L1), and
+                          |r_b| <= r_max, on C2 dU               6 Nc rows
             wheel speeds  |(I_Nc kron J^-) C2 dU| <= w_max       8 Nc rows
 
         Only their right-hand sides change per tick (u(k-1), and the caps from
-        the supervisor). mpc_constraints.m is the reference.
+        the supervisor), and the amplitude block when the supervisor switches its
+        shape. mpc_constraints.m is the reference (L1 amplitudes).
         """
         Nc = self.Nc
         C2 = np.kron(np.tril(np.ones((Nc, Nc))), np.eye(3))
         I_n = np.eye(3 * Nc)
         return np.vstack((I_n, -I_n,
-                          np.kron(np.eye(Nc), A_AMP) @ C2,
+                          np.kron(np.eye(Nc), a_amp) @ C2,
                           np.kron(np.eye(Nc), self.A_wheel) @ C2))
 
     def _setup_osqp(self):
@@ -223,17 +236,20 @@ class Mpc:
         Create the one osqp.OSQP() with the fixed sparsity pattern (brief Section 6).
 
         P is the upper triangle of E_ext: E is dense, plus the slack's diagonal.
-        A is A_ext: the nonzeros of M_const, the output rows taken as dense in dU,
-        and the slack column. Set up once with placeholder ones (a positive
-        semidefinite P); the index arrays, in CSC data order, let each tick hand
-        OSQP the new values: update(Px=E_ext[P_rows, P_cols], Ax=A_ext[A_rows, A_cols]).
+        A is A_ext: the nonzeros of M_const (of either amplitude shape, so a switch
+        keeps the pattern), the output rows taken as dense in dU, and the slack
+        column. Set up once with placeholder ones (a positive semidefinite P); the
+        index arrays, in CSC data order, let each tick hand OSQP the new values:
+        update(Px=E_ext[P_rows, P_cols], Ax=A_ext[A_rows, A_cols]).
         """
         import osqp     # here rather than at the top, so that the maths imports without it
 
         n, m, k = self.n, self.m, self.wheel.stop
         P_rows, P_cols = np.triu_indices(n)
         P_rows, P_cols = np.append(P_rows, n), np.append(P_cols, n)
-        c_rows, c_cols = np.nonzero(self.M_const)
+        union = self.M_const != 0.0
+        union[self.amp] = (self.M_amp[False] != 0.0) | (self.M_amp[True] != 0.0)
+        c_rows, c_cols = np.nonzero(union)
         o_rows, o_cols = np.divmod(np.arange((m - k) * n), n)
         A_rows = np.concatenate((c_rows, k + o_rows, np.arange(k, m + 1)))
         A_cols = np.concatenate((c_cols, o_cols, np.full(m + 1 - k, n)))
@@ -269,7 +285,8 @@ class Mpc:
         """
         n, Nc, A, u = self.n, self.Nc, self.A_ext, self.u_ext
         caps = np.array((v_max, v_max, v_max, v_max, r_max, r_max))
-        u[self.amp] = np.tile(caps - A_AMP @ u_prev, Nc)
+        a_amp = A_AMP_L1 if self.l1 else A_AMP_AXIS
+        u[self.amp] = np.tile(caps - a_amp @ u_prev, Nc)
         u[self.wheel] = np.tile(self.w_max - self.A_wheel @ u_prev, Nc)
         Phi_th = Phi[2::3]
         A[self.pen, :n] = Phi[0::3]
@@ -281,7 +298,7 @@ class Mpc:
         np.minimum(u, INF, out=u)                       # a limit set to inf means no limit
         return A[:self.m, :n], u[:self.m]
 
-    def step(self, x_hat, r_gyro, u_prev, y_ref, v_max, r_max, qw=None):
+    def step(self, x_hat, r_gyro, u_prev, y_ref, v_max, r_max, qw=None, l1_cap=False):
         """
         Run one tick and return an MpcResult (brief Section 6, steps 1-8).
 
@@ -300,12 +317,18 @@ class Mpc:
 
         qw, if given, replaces the tracking multipliers [x, y, theta] for this tick
         and those after it (the supervisor's per-stage schedule: FINAL locks the
-        heading); Q_bar is only rebuilt when it changes.
+        heading); Q_bar is only rebuilt when it changes. l1_cap picks the speed
+        cap's shape, |u_b| + |v_b| <= v_max if true, else each axis on its own (the
+        supervisor's: L1 in FINAL and HOLD); the amplitude block is only swapped
+        when it changes.
         """
         n, Np, Nc, Ts = self.n, self.Np, self.Nc, self.Ts
         if qw is not None and not np.array_equal(qw, self.q_w):
             self.q_w = np.array(qw, dtype=float)
             self.q_bar = np.tile(self.q_w * self.Qy, Np)
+        if bool(l1_cap) != self.l1:
+            self.l1 = bool(l1_cap)
+            self.A_ext[self.amp, :n] = self.M_amp[self.l1]
         x_p = np.array((Ts * x_hat[3], Ts * x_hat[4], Ts * r_gyro, x_hat[0], x_hat[1], x_hat[2]))
         A, B = linearise(x_hat[:3], u_prev, Ts)
         F, Phi = predict_matrices(*augment(A, B), Np, Nc)

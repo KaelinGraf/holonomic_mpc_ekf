@@ -45,14 +45,18 @@ def test_nominal_run_through_the_table(p):
     assert out.stage == Stage.APPROACH and out.command_enabled
     s0 = p['sup']['standoff']
     assert out.y_ref == (-s0, 0.0, 0.0) and out.v_max == p['lim']['v_approach']
+    assert not out.l1_cap                           # APPROACH caps each axis on its own
 
     va, du = p['lim']['v_approach'], p['mpc']['Ts'] * p['lim']['a_max']
     aligned = np.array([-s0 + 0.5 * p['sup']['standoff_tol'], 0.009, math.radians(0.9), 0.0, 0.0])
     out = sup.step(_inputs(x=aligned, u_last=np.array([va, 0.0, 0.0])))
     assert out.stage == Stage.FINAL and out.y_ref == (0.0, 0.0, 0.0)
-    assert out.v_max == pytest.approx(va - du)      # one increment off the faster axis
+    assert out.v_max == pytest.approx(va - du)      # one increment: v_b has none to give
+    assert out.l1_cap                               # FINAL caps the sum; APPROACH each axis
     out = sup.step(_inputs(x=aligned, u_last=np.array([va - 0.06, 0.06, 0.0])))
-    assert out.v_max == pytest.approx(va - 0.06 - du)   # per-axis cap: the faster axis sets it
+    assert out.v_max == pytest.approx(va - 2 * du)  # both axes moving: 2 du_max
+    out = sup.step(_inputs(x=aligned, u_last=np.array([va, 0.12, 0.0])))
+    assert out.v_max == pytest.approx(va + 0.12 - 2 * du)   # from a per-axis sum above v_approach
     out = sup.step(_inputs(x=aligned, u_last=np.array([0.02, 0.01, 0.0])))
     assert out.v_max == p['lim']['v_final']         # floored at v_final
 

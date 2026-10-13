@@ -80,6 +80,7 @@ class Output:
     r_max: float = 0.0
     command_enabled: bool = False
     qw: tuple = (1.0, 1.0, 1.0)     # tracking multipliers [x, y, theta] for this tick's MPC
+    l1_cap: bool = False            # cap |u_b| + |v_b| (FINAL, HOLD), not each axis (APPROACH)
 
 
 class Supervisor:
@@ -198,15 +199,19 @@ class Supervisor:
         """
         Return the falling speed cap of FINAL and HOLD, never stepped.
 
-        A cap below what one tick of increments can reach leaves the hard
-        amplitude rows infeasible. The cap holds each of |u_b| and |v_b| on its
-        own (Mpc's per-axis amplitude rows), and each can fall by at most du_max
-        a tick, so the cap falls by du_max from the faster of the two.
+        FINAL and HOLD cap the sum |u_b| + |v_b| (Output.l1_cap; APPROACH caps
+        each axis on its own). A cap below what one tick of increments can reach
+        leaves the hard amplitude rows infeasible. Each of |u_b| and |v_b| can
+        fall by at most du_max, so the cap falls by min(|u_b|, du_max) +
+        min(|v_b|, du_max): the brief's 2 du_max when both are moving, but only
+        du_max when driving straight in (v_b = 0), where 2 du_max cannot be
+        reached. It starts from the sum APPROACH left, which per axis can be
+        above v_approach.
         """
         if u_last is None:
             return self.v_final
-        reachable = max(abs(u_last[0]), abs(u_last[1])) - self.du_t
-        return max(self.v_final, min(self.v_approach, reachable))
+        ub, vb = abs(u_last[0]), abs(u_last[1])
+        return max(self.v_final, ub + vb - min(ub, self.du_t) - min(vb, self.du_t))
 
     def _output(self, stage, u_last):
         if stage == Stage.APPROACH:
@@ -214,10 +219,11 @@ class Supervisor:
                           self.qw_approach)
         if stage == Stage.FINAL:
             return Output(stage, self.dock_ref, self._ramped_cap(u_last), self.r_max, True,
-                          self.qw_final)
+                          self.qw_final, l1_cap=True)
         if stage == Stage.HOLD:
             qw = self.qw_final if self.resume == Stage.FINAL else self.qw_approach
-            return Output(stage, self.hold_ref, self._ramped_cap(u_last), self.r_max, True, qw)
+            return Output(stage, self.hold_ref, self._ramped_cap(u_last), self.r_max, True, qw,
+                          l1_cap=True)
         return Output(stage)
 
 
