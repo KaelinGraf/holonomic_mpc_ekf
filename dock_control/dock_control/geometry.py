@@ -10,6 +10,7 @@ import math
 import numpy as np
 
 TWO_PI = 2.0 * math.pi
+GRAVITY = 9.80665
 
 
 def wrap_pi(a):
@@ -44,6 +45,12 @@ def se3_inv(T):
     Ti[:3, :3] = Rt
     Ti[:3, 3] = -Rt @ T[:3, 3]
     return Ti
+
+
+def body_gravity_xy(x, y, z, w):
+    """Return the x and y an accelerometer at rest reads from gravity, at orientation (x, y, z, w).
+    """
+    return 2.0 * GRAVITY * (x * z - w * y), 2.0 * GRAVITY * (y * z + w * x)
 
 
 def quat_to_rot(x, y, z, w):
