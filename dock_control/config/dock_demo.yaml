@@ -11,6 +11,10 @@
 #   frame, is (0.236, 0.010), the board 1 cm left of the docked robot. Then 5 mm
 #   further out, (0.241, 0.010): pressed against the coupler, the fixes put the robot
 #   3-7 mm short (camera-board range 0.197 m), so DOCKED never came.
+#   2026-10-14, the 200 mm board (40.5 mm squares) mounted, camera recalibrated: docked against
+#   the coupler, the fixes read x -26.4 mm, y +6.4 mm, theta -0.90 deg (camera-board range 0.265 m).
+#   marker_m (0.2672, 0.0078) and marker_psi0_deg 180.92 make that pose read (0, 0, 0), solved
+#   through FiducialChain on 62 live docked poses.
 # - sup: APPROACH aims 40 mm short of the dock (standoff 0.04, from 0.30) and hands
 #   over within 20 mm of that; FINAL's heading lock is only for the last centimetres
 #   (the user, 2026-10-13). dock_tol 5 mm (from 3) for the fixes' noise at contact. Docked, the lens is then
@@ -97,7 +101,7 @@ dock:
   fid:  {rate: 15, delay_nominal: 0.05, sigma_p0: 0.004, sigma_th_deg: 0.5, d0: 1.0, gate: 100}   # bench
   ekf:  {q_v: 4.5e-6, q_th: 3.8e-9, p_floor: 1.0e-8, sigma_v0: 0.1, buffer_s: 0.5, step_s: 0.005, zupt_settle_s: 0.3, zupt_sigma_v: 0.005,
          zupt_q_p: 0.05, zupt_q_th_deg: 10.0}
-  geom: {Rw: 0.0275, lx: 0.0765, ly: 0.089, Lk: 0.201, cam_xyz: [0.070, 0.0, 0.08], marker_m: [0.241, 0.010], marker_psi0_deg: 180,
+  geom: {Rw: 0.0275, lx: 0.0765, ly: 0.089, Lk: 0.201, cam_xyz: [0.070, 0.0, 0.08], marker_m: [0.2672, 0.0078], marker_psi0_deg: 180.92,
          board_squares: [5, 5], board_square_m: 0.0405}   # measured, cam z a guess
   lim:  {v_approach: 0.18, v_final: 0.09, a_max: 0.5, r_max: 0.30, alpha_max: 1.0, w_max: 9.0}   # speeds at 60%; w_max: measure
   mpc:  {Ts: 0.05, Np: 80, Nc: 10, rw: [16, 16, 64], qw: [1, 0.25, 2], qw_final: [1, 1, 10], contact_band: 0.010, th_max_deg: 180, Qy: [6944, 62500, 1459], Ru: [1600, 1600, 400], rho_s: 5.8e+6}
