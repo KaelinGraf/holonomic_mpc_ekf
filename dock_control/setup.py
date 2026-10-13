@@ -31,6 +31,7 @@ setup(
             # One process each, pinned to its own core (brief Section 3).
             'ekf_node = dock_control.ekf_node:main',
             'mpc_node = dock_control.mpc_node:main',
+            'dock_logger = dock_control.dock_logger:main',
         ],
     },
 )

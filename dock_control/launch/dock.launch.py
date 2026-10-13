@@ -1,7 +1,7 @@
 """
-Launch the docking stack on the Pi: ekf_node, mpc_node, static transforms and a bag.
+Launch the docking stack on the Pi: ekf_node, mpc_node, static transforms and dock_logger.
 
-    ros2 launch dock_control dock.launch.py                   # demo parameters, records a bag
+    ros2 launch dock_control dock.launch.py                   # demo parameters, a bag per attempt
     ros2 launch dock_control dock.launch.py rt:=true          # pinned and SCHED_FIFO 50 (the Pi)
     ros2 launch dock_control dock.launch.py record:=false
 
@@ -11,14 +11,13 @@ convchart_ros pipeline on the laptop.
 """
 
 import os
-import time
 
 from ament_index_python.packages import get_package_share_directory
 from dock_control import params
 from dock_control.fiducial import FiducialChain
 from dock_control.geometry import rot_to_quat, se3_inv
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -77,11 +76,11 @@ def generate_launch_description():
         DeclareLaunchArgument('qp_solver', default_value='daqp',
                               description="the MPC's QP solver: daqp or osqp"),
         DeclareLaunchArgument('imu_topic', default_value='imu/data',
-                              description='the 200 Hz IMU stream the EKF is driven by'),
+                              description='the 150 Hz IMU stream the EKF is driven by'),
         DeclareLaunchArgument('record', default_value='true',
-                              description='ros2 bag record -a into bags/ (brief Section 11)'),
+                              description='dock_logger: a bag per docking attempt into bags/, '
+                                          'without the camera (brief Section 11)'),
         OpaqueFunction(function=_setup),
-        ExecuteProcess(cmd=['ros2', 'bag', 'record', '-a',
-                            '-o', time.strftime('bags/dock_%Y%m%d_%H%M%S')],
-                       output='log', condition=IfCondition(LaunchConfiguration('record'))),
+        Node(package='dock_control', executable='dock_logger', output='screen',
+             condition=IfCondition(LaunchConfiguration('record'))),
     ])
