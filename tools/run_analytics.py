@@ -52,9 +52,11 @@ import sys
 import tempfile
 import time
 
-import numpy as np
-
 os.environ['ROS_AUTOMATIC_DISCOVERY_RANGE'] = 'OFF'
+for _var in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS'):
+    os.environ.setdefault(_var, '1')
+
+import numpy as np  # noqa: E402
 
 TOOLS = Path(__file__).resolve().parent
 CONTROLLER = TOOLS.parent
@@ -64,7 +66,7 @@ NOTES = P4P / 'report' / 'project content' / '7_ros2_implementation'
 DEFAULT_OUT = NOTES / 'run_records'
 DEFAULT_BAGS = P4P / 'run_data' / 'pi_bags'
 SIM_WORKER = TOOLS / 'run_analytics_sim.py'
-VERSION = 1
+VERSION = 2
 
 STAGES = ('IDLE', 'ACQUIRE', 'APPROACH', 'FINAL', 'DOCKED', 'HOLD', 'ABORT')
 IDLE, ACQUIRE, APPROACH, FINAL, DOCKED, HOLD, ABORT = range(7)
@@ -453,7 +455,13 @@ def config_at(sha: str) -> dict:
 
 @functools.lru_cache(maxsize=None)
 def cap_type(sha: str) -> str:
-    """'per-axis' (|u_b|, |v_b| <= v_max each, from 3c397a6) or 'L1' (|u_b| + |v_b| <= v_max)."""
+    """
+    The speed cap's shape at sha: 'L1' (|u_b| + |v_b| <= v_max, the brief's), 'per-axis' (|u_b|, |v_b| <= v_max
+    each; 3c397a6), or 'per-axis in APPROACH, L1 in FINAL and HOLD' (the supervisor picks per stage; ef5e42e).
+    """
+    sup = git(CONTROLLER, 'show', f'{sha}:dock_control/dock_control/supervisor.py')
+    if 'l1_cap' in sup:
+        return 'per-axis in APPROACH, L1 in FINAL and HOLD'
     text = git(CONTROLLER, 'show', f'{sha}:dock_control/dock_control/mpc.py')
     return 'per-axis' if re.search(r'A_AMP = np\.array\(\[\[1\.0, 0\.0, 0\.0\]', text) else 'L1'
 
@@ -573,7 +581,7 @@ def replay_ticks(b: Bag, n_max: int = 160) -> list:
             continue
         ticks.append({'x': b.est[j, 2:7].tolist(), 'r_gyro': float(b.est[j, 12]), 'u_prev': u_prev.tolist(),
                       'y_ref': st[k, 2:5].tolist(), 'v_max': float(st[k, 5]), 'r_max': float(st[k, 6]),
-                      'qw_stage': STAGES[resume if s == HOLD else s], 'y_pred': b.y_pred[i].tolist(),
+                      'stage': STAGES[s], 'resume': STAGES[resume], 'y_pred': b.y_pred[i].tolist(),
                       'u': b.mpc[i, 2:5].tolist(), 't': float(t)})
     if len(ticks) > n_max:
         ticks = [ticks[int(i)] for i in np.linspace(0, len(ticks) - 1, n_max)]
@@ -617,8 +625,9 @@ def deployed_config(b: Bag, tl: Timeline, replay: bool = True) -> dict:
 
     def score(r):
         rep = r['replay']
-        return (len(r['mismatches']), rep['plan_median_mm'] if rep and rep['plan_median_mm'] is not None
-                else 1e9, 0 if r['commit'] == prev.short and not r['variant'] else 1)
+        ok = rep and rep['plan_median_mm'] is not None
+        return (len(r['mismatches']), round(rep['plan_median_mm'], 1) if ok else 1e9,
+                round(rep['plan_p95_mm'] * 2) / 2 if ok else 1e9, 0 if r['commit'] == prev.short and not r['variant'] else 1)
     best = min(results, key=score)
     out = {k: v for k, v in best.items() if k != 'params'}
     out['observed'] = obs
@@ -743,13 +752,14 @@ def window_fit(t: np.ndarray, y: np.ndarray, tg: np.ndarray, half: float, min_n:
     return slope, value
 
 
-def camera_track(b: Bag, t_lo: float, t_hi: float, dt: float = 0.05, half: float = 0.2):
-    """
-    The robot's motion from the camera alone, on a grid: velocity in the target frame, in the body frame, and
-    the heading, from straight-line fits of the unambiguous fixes over 2 x half (mpc_analysis vel_truth.py).
+def camera_track(b: Bag, t_lo: float, t_hi: float, dt: float = 0.05, half: float = 0.2, ambiguous: bool = False):
+    """The robot's motion from the camera alone, on a grid: velocity in the target frame, in the
+    body frame, and the heading, from straight-line fits of the fixes over 2 x half
+    (mpc_analysis vel_truth.py).
     """
     f = b.fix
-    keep = (f[:, 19] == 0) & (f[:, 1] >= t_lo - 1.0) & (f[:, 1] <= t_hi + 1.0) if len(f) else np.array([], bool)
+    keep = (((f[:, 19] == 0) | ambiguous) & (f[:, 1] >= t_lo - 1.0) & (f[:, 1] <= t_hi + 1.0)) if len(f) \
+        else np.array([], bool)
     f = f[keep]
     tg = np.arange(t_lo, t_hi, dt)
     if len(f) < 6 or not len(tg):
@@ -981,6 +991,23 @@ def processed_fixes(b: Bag) -> np.ndarray:
     return np.array(rows, float).reshape(-1, 7)
 
 
+def ekf_velocity(b: Bag, tl: Timeline, cam: dict) -> dict:
+    """The EKF's velocity against a camera track over APPROACH to the end of commanding: RMS, slope, lag."""
+    e = b.est[np.argsort(b.est[:, 1])]
+    t = cam['t']
+    mv = (t >= tl.approach) & (t <= tl.t_cmd)
+    vel = {}
+    for k, name in ((5, 'x'), (6, 'y')):
+        ve, vc = np.interp(t, e[:, 1], e[:, k]), cam['v' + name]
+        ok = mv & np.isfinite(vc)
+        if ok.sum() >= 30:
+            lag = fit_lag_gain(t[ok], t[ok], vc[ok], ve[ok], max_lag=0.4)
+            vel[name] = {'rms_mm_s': fin(rms(ve[ok] - vc[ok]) * 1e3, 1), 'slope': fin(np.polyfit(vc[ok], ve[ok], 1)[0], 3),
+                         'lag_s': fin(lag['lag_s'], 2), 'n': int(ok.sum()),
+                         'camera_p95_mm_s': fin(pct(np.abs(vc[ok]), 95) * 1e3, 0)}
+    return vel
+
+
 def analyse_ekf(b: Bag, tl: Timeline, cam: dict | None, gate: float) -> tuple[dict, dict]:
     """The estimate against the camera-only track: residuals, velocity, NIS, re-anchors, consistency."""
     m, d = {}, {}
@@ -1015,16 +1042,10 @@ def analyse_ekf(b: Bag, tl: Timeline, cam: dict | None, gate: float) -> tuple[di
         mv = (t >= tl.approach) & (t <= tl.t_cmd)
         vx_e = np.interp(t, ts, e[:, 5])
         vy_e = np.interp(t, ts, e[:, 6])
-        vel = {}
-        for name, ve, vc in (('x', vx_e, cam['vx']), ('y', vy_e, cam['vy'])):
-            ok = mv & np.isfinite(vc)
-            if ok.sum() >= 30:
-                slope = np.polyfit(vc[ok], ve[ok], 1)[0]
-                lag = fit_lag_gain(t[ok], t[ok], vc[ok], ve[ok], max_lag=0.4)
-                vel[name] = {'rms_mm_s': fin(rms(ve[ok] - vc[ok]) * 1e3, 1), 'slope': fin(slope, 3),
-                             'lag_s': fin(lag['lag_s'], 2), 'n': int(ok.sum()),
-                             'camera_p95_mm_s': fin(pct(np.abs(vc[ok]), 95) * 1e3, 0)}
-        m['velocity'] = vel
+        m['velocity'] = ekf_velocity(b, tl, cam)
+        cam_all = camera_track(b, tl.t0, tl.t_end, ambiguous=True)
+        if cam_all is not None:
+            m['velocity_all_fixes'] = ekf_velocity(b, tl, cam_all)
         d['vel'] = (t, vx_e, vy_e, cam['vx'], cam['vy'], mv)
     pf = processed_fixes(b)
     if len(pf):
@@ -2200,9 +2221,16 @@ def section_md(key: str, M: dict) -> str:
                      f"variances were right), {r['within_2sd']} within 2 sd (0.95 if right).")
         for k, name in (('x', 'forward (x)'), ('y', 'lateral (y)')):
             v = (e.get('velocity') or {}).get(k)
+            va = (e.get('velocity_all_fixes') or {}).get(k)
             if v:
                 L.append(f"- Velocity {name} against the camera: RMS error {v['rms_mm_s']} mm/s while the camera saw up to "
-                         f"{v['camera_p95_mm_s']} mm/s (p95), slope {v['slope']}, EKF {v['lag_s']} s behind ({v['n']} samples).")
+                         f"{v['camera_p95_mm_s']} mm/s (p95), slope {v['slope']}, EKF {v['lag_s']} s behind ({v['n']} samples)"
+                         + (f"; with the ambiguous fixes kept in the camera track, as vel_truth.py does: {va['rms_mm_s']} mm/s, "
+                            f"slope {va['slope']} ({va['n']} samples)" if va else '') + '.')
+        if e.get('velocity_all_fixes'):
+            L.append('- The two camera tracks bracket the real velocity error: the first leaves out the stretches where every '
+                     'fix was ambiguous (head-on, at range), which is where the EKF struggles; the second keeps the solution '
+                     'flips in its truth.')
         n = e.get('nis')
         if n:
             L.append(f"- Fixes processed {n['processed']}, {n['gated']} in gated stages, {fmt(n['accepted_share_gated'], '.0%')} accepted "
@@ -2341,8 +2369,8 @@ def aggregate(out_root: Path) -> None:
     if flat:
         keys = list(dict.fromkeys(k for f in flat for k in f))
         write_csv(out_root / 'aggregate.csv', keys, [[f.get(k, '') for k in keys] for f in flat])
-    aggregate_figures(runs, out_root)
-    (out_root / 'INDEX.md').write_text(index_md(runs, out_root))
+    figs = aggregate_figures(runs, out_root)
+    (out_root / 'INDEX.md').write_text(index_md(runs, out_root, figs))
     (out_root / 'README.md').write_text(PIPELINE_README)
 
 
@@ -2364,6 +2392,8 @@ def flatten_run(r: dict) -> dict:
          'ekf_vx_rms_mm_s': (v.get('x') or {}).get('rms_mm_s'), 'ekf_vy_rms_mm_s': (v.get('y') or {}).get('rms_mm_s'),
          'ekf_vx_slope': (v.get('x') or {}).get('slope'), 'ekf_vy_slope': (v.get('y') or {}).get('slope'),
          'ekf_vy_lag_s': (v.get('y') or {}).get('lag_s'),
+         'ekf_vy_rms_all_fixes_mm_s': ((e.get('velocity_all_fixes') or {}).get('y') or {}).get('rms_mm_s'),
+         'ekf_vy_slope_all_fixes': ((e.get('velocity_all_fixes') or {}).get('y') or {}).get('slope'),
          'resid_y_rms_mm': (e.get('residual') or {}).get('y_rms_mm'),
          'nis_median': (e.get('nis') or {}).get('median'), 'fix_accept_share': (e.get('nis') or {}).get('accepted_share_gated'),
          'reanchors': e.get('reanchors'), 'est_step_max_mm': e.get('step_max_mm'),
@@ -2408,8 +2438,15 @@ def era_bands(ax, rows: list, label: bool = True) -> None:
             start = i
 
 
-def aggregate_figures(runs: list, out_root: Path) -> None:
+def span(vals, spec='.2f') -> str:
+    v = [x for x in vals if x is not None and math.isfinite(x)]
+    return f'{min(v):{spec}}-{max(v):{spec}}' if v else 'n/a'
+
+
+def aggregate_figures(runs: list, out_root: Path) -> list:
+    """The cross-run figures, each with its caption and reasoning (numbers computed from the runs)."""
     plt = style()
+    figs = []
     docks = [r for r in runs if r['kind'] == 'dock']
     rows = [r for r in docks if any(a.get('gain') is not None and not a.get('note')
                                     for a in ((r.get('drive') or {}).get('axes') or {}).values())]
@@ -2432,6 +2469,25 @@ def aggregate_figures(runs: list, out_root: Path) -> None:
         era_bands(axs[0], rows, label=False)
         fig.tight_layout()
         save(fig, out_root, 'drive_gains')
+        cal = [r for r in rows if firmware_era(r) == 'per-wheel calibrated']
+
+        def g(axis, key='gain'):
+            return [(r['drive']['axes'].get(axis) or {}).get(key) for r in cal
+                    if not (r['drive']['axes'].get(axis) or {}).get('note')]
+        figs.append(Fig('drive_gains', 'What the drive delivered, per run and axis',
+                        'For each docking run with a usable fit, the gain (delivered over commanded velocity) and the lag '
+                        'behind the command, forward, sideways and turning, grouped by the drive firmware of the day.',
+                        'Each run\'s drive fit (its README, Drive): camera-derived body velocity, the gyro for turning, '
+                        'least squares for gain, offset and lag over APPROACH to the end of commanding; fits with R^2 < 0.3 '
+                        'are left out.',
+                        f"On the per-wheel calibrated firmware ({len(cal)} runs) the robot delivered {span(g('forward'))}x the "
+                        f"forward command, {span(g('lateral'))}x sideways and {span(g('turn'))}x of the turn rate, "
+                        f"{span(g('forward', 'lag_s') + g('lateral', 'lag_s') + g('turn', 'lag_s'))} s late. The MPC predicts "
+                        'with gain 1 and no lag, so its predictions overstate sideways motion and turning in every run.',
+                        'The camera velocity is noisy and drops head-on, long-range stretches; gains vary with speed and '
+                        'battery; a run that barely used an axis has no point for it. The firmware changed twice that day '
+                        '(the channel wiring, then the per-wheel calibration about 18:27 NZDT), so compare within an era.',
+                        'aggregate'))
     rows = [(run_label(r), r['ekf'].get('velocity') or {}) for r in docks]
     rows = [(n, v) for n, v in rows if v]
     if rows:
@@ -2450,6 +2506,19 @@ def aggregate_figures(runs: list, out_root: Path) -> None:
         axs[0].legend(loc='lower left', bbox_to_anchor=(0.0, 1.0), ncol=2)
         fig.tight_layout()
         save(fig, out_root, 'ekf_velocity_error')
+        vy = [(v.get('y') or {}).get('rms_mm_s') for _, v in rows]
+        sy = [(v.get('y') or {}).get('slope') for _, v in rows]
+        vya = [((r['ekf'].get('velocity_all_fixes') or {}).get('y') or {}).get('rms_mm_s') for r in docks
+               if r['ekf'].get('velocity')]
+        figs.append(Fig('ekf_velocity_error', "The EKF's velocity against the camera, per run",
+                        'For each docking run, the RMS difference between the EKF\'s velocity and the camera-only velocity '
+                        '(left) and the slope of one on the other (right; 1 = the EKF follows the camera), forward and sideways.',
+                        'Each run\'s EKF section: unambiguous fixes, 0.4 s line fits, over APPROACH to the end of commanding.',
+                        f"Lateral RMS {span(vy, '.0f')} mm/s and slopes {span(sy)}; with the ambiguous fixes kept in the camera "
+                        f"track (as vel_truth.py) the lateral RMS is {span(vya, '.0f')} mm/s. The MPC starts every prediction "
+                        'from this velocity, so the lateral error feeds straight into the plans (mpc_analysis_2026-10-14 finding 3).',
+                        'The reference is itself noisy, and leaving out the ambiguous stretches favours the EKF: the true '
+                        'error lies between the two figures. Short runs have few samples.', 'aggregate'))
     pool = {}
     for r in runs:
         det = r['detector']['name']
@@ -2473,6 +2542,16 @@ def aggregate_figures(runs: list, out_root: Path) -> None:
         ax.legend(title='detector deployed', title_fontsize=7)
         fig.tight_layout()
         save(fig, out_root, 'fix_ambiguity_by_range')
+        figs.append(Fig('fix_ambiguity_by_range', 'Ambiguous poses by range, all runs pooled per deployed detector',
+                        'The share of solved poses that were ambiguous (IPPE\'s two solutions within 1.5x in reprojection '
+                        'error) per 0.1 m of range, pooling every run by the detector deployed at the time; the count of '
+                        'poses is beside each point.',
+                        'inference_result of every bag (docking, bring-up and drive-calibration runs).',
+                        'With the 24 mm board, ambiguity climbs from a few per cent inside 0.5 m to over half beyond 0.7 m, '
+                        'whichever detector ran: a geometric limit (7c item 57).',
+                        'The detectors ran in different sessions, at different angles and light, so a gap between the curves '
+                        'here is not a detector effect; the comparison on the same frames (Detectors, below) is the fair '
+                        'test. Range is the pipeline\'s own estimate.', 'aggregate'))
     rows = [(run_label(r), r['mpc']['solve_ms']) for r in docks if (r.get('mpc') or {}).get('solve_ms')]
     if rows:
         fig, ax = plt.subplots(figsize=(6.4, 0.38 * len(rows) + 1.4))
@@ -2488,6 +2567,14 @@ def aggregate_figures(runs: list, out_root: Path) -> None:
         ax.legend(loc='lower right')
         fig.tight_layout()
         save(fig, out_root, 'mpc_solve_times')
+        figs.append(Fig('mpc_solve_times', 'MPC solve time per run on the Pi',
+                        'The median, 99th percentile and longest solve of each docking run (log scale), against the 25 ms '
+                        'budget of the 50 ms tick.',
+                        'dock/mpc_info.solve_ms: wall time around Mpc.step on the Pi (DAQP, Np 40 or 80).',
+                        f"Medians {span([s['median'] for _, s in rows])} ms, longest {span([s['max'] for _, s in rows])} ms: "
+                        'the solve uses under a tenth of its budget even at the 4 s horizon.',
+                        'Wall time on a core shared with other work: a slow tick can be scheduling, not the solver.',
+                        'aggregate'))
     rows = [r for r in docks if r.get('sim')]
     if rows:
         fig, axs = plt.subplots(1, 2, figsize=(9.0, 3.8))
@@ -2507,9 +2594,24 @@ def aggregate_figures(runs: list, out_root: Path) -> None:
             ax.set_ylabel(f'simulation: {lab}')
         fig.tight_layout()
         save(fig, out_root, 'sim_vs_real')
+        ov = [(r['run_metrics'].get('lateral_overshoot_mm'), r['sim'].get('lateral_overshoot_mm')) for r in rows]
+        ov = [(a, b) for a, b in ov if a is not None and b is not None and a > 0]
+        same = sum(1 for r in rows if r['run_metrics'].get('outcome') == r['sim'].get('outcome'))
+        figs.append(Fig('sim_vs_real', 'The simulation against the robot, every simulated run',
+                        'Per docking run, the time from APPROACH to DOCKED (left; 0 = did not dock) and the lateral '
+                        'overshoot (right), robot against its simulation; points on the grey line agree.',
+                        'Each run simulated from the camera\'s pose at APPROACH entry with the code and configuration that '
+                        'ran and the run\'s own drive gains and lags (run_analytics_sim.py).',
+                        f"Outcome the same in {same} of {len(rows)} runs. Where the robot overshot sideways, it did so by "
+                        f"{span([a for a, _ in ov], '.0f')} mm against the simulation's {span([b for _, b in ov], '.0f')} mm: "
+                        'the drive model alone does not produce the overshoot; what the simulation leaves out (ambiguous '
+                        'fixes and the EKF velocity error they cause, re-anchors) does.',
+                        'One noise seed per run; the simulation has no ambiguous poses, fix bias, slip or coupler contact, and '
+                        'misses the old firmware\'s deadbands and the miswired channels of the first runs.', 'aggregate'))
+    return figs
 
 
-def index_md(runs: list, out_root: Path) -> str:
+def index_md(runs: list, out_root: Path, figs: list | None = None) -> str:
     L = ['# Run records: index', '',
          f'Generated {nz(time.time()):%Y-%m-%d %H:%M} NZDT by '
          '`controller_ws/tools/run_analytics.py` from every `<run>/metrics.json` here. Definitions and reasoning: '
@@ -2540,13 +2642,8 @@ def index_md(runs: list, out_root: Path) -> str:
         L += ['## Other recordings', '', table(rows, ['run', 'kind', 'NZDT', 'length (s)', 'poses', 'frames', 'ambiguous',
                                                        'detector']), '']
     L += ['## Across runs', '']
-    for name, cap in (('drive_gains', 'Drive gain and lag per run and axis (camera-measured; gyro for turn).'),
-                      ('ekf_velocity_error', 'EKF velocity against the camera per run: RMS error and slope.'),
-                      ('fix_ambiguity_by_range', 'Ambiguous poses by range, pooled over runs per deployed detector.'),
-                      ('mpc_solve_times', 'MPC solve time per run on the Pi.'),
-                      ('sim_vs_real', 'Simulation against the robot: time to dock and lateral overshoot.')):
-        if (out_root / 'figures' / f'{name}.png').exists():
-            L += [f'![{cap}](figures/{name}.png)', '', f'{cap} ([PDF](figures/{name}.pdf))', '']
+    for n, f in enumerate(figs or [], 1):
+        L.append(fig_md(f, n))
     for sub, title, how in (('detectors', 'Detectors on the real frames', 'run with `--detectors` (the GPU, one model at a time)'),
                             ('finetune', 'Fine-tuning records', 'run with `--finetune`')):
         p = out_root / sub / 'SUMMARY.md'
@@ -2627,8 +2724,12 @@ range, which is where the estimator struggles most; read its absence as part of 
   estimate is the real-time one the MPC used, before that fix arrived.
 - *Consistency:* residual^2 / (P + R) per axis, P from DockEstimate.p_diag and R from the fix's own covariance.
   About 1 on average (and 95% within 2 sd) if the filter's claimed uncertainty is right; above, overconfident.
-- *Velocity:* the EKF's velocity against the camera's over APPROACH to the end: RMS error, slope of EKF on camera
-  (1 = follows it), and the EKF's lag. The MPC predicts from this velocity.
+- *Velocity:* the EKF's velocity against the camera's over APPROACH to the end of commanding: RMS error, slope of
+  EKF on camera (1 = follows it), and the EKF's lag. The MPC predicts from this velocity. It is computed twice:
+  against the unambiguous-only track (the headline), and against a track that keeps the ambiguous fixes, as
+  `mpc_analysis_2026-10-14/vel_truth.py` does (`velocity_all_fixes`; that one reproduces vel_truth's numbers). The
+  first leaves out the head-on, long-range stretches where the EKF struggles most; the second counts solution flips
+  as motion. The real error lies between them: on dock_20261013_055413, 31 against 55 mm/s lateral RMS.
 - *NIS:* DockEstimate.last_nis per processed fix (a change of last_nis or last_fix_accepted marks one), in the
   gated stages, against chi-square with 3 dof (median 2.37, 95% point 7.81); acceptance share against the gate (100).
 - *Re-anchors* from ekf_node's log, with the jump; *estimate steps* over 10 mm between consecutive estimates.
@@ -2645,9 +2746,13 @@ start pose (camera, at APPROACH), lateral overshoot (furthest past the centre li
 start, camera), final pose (median of the last 0.5 s of unambiguous fixes before DOCKED or the end).
 
 **Drive.** The command in force (cmd_vel held, zero after the bridge's 0.1 s timeout) against the camera's body
-velocity (gyro for turning), per axis: gain, offset and lag by least squares over lags 0-0.6 s. Gain < 1:
-under-delivery; lag: how late. These are exactly the model errors the MPC ignores, and the simulation's plant.
-The lag includes the camera stamp offset (10-40 ms) and the fit window.
+velocity (gyro for turning, over the same 0.4 s window), per axis: gain, offset and lag by least squares over lags
+0-0.6 s, over APPROACH to the end of commanding. A fit needs R^2 >= 0.3 and some motion on the axis; a usable fit
+with a negative or tiny gain is kept and flagged (the robot moved against, or barely with, the command). Gain < 1:
+under-delivery; lag: how late. These are the model errors the MPC ignores, and the simulation's plant. The lag
+includes the camera stamp offset (10-40 ms). vel_truth.py fitted the target frame's x and y with the gain fixed at
+1 during the lag search; this fits the body axes, so lateral numbers agree (0.73x at 0.15 s on 055413 in both) and
+forward ones differ where the robot was turned.
 
 **Fixes.** Pose rate, refusals, ambiguity, reprojection RMS and corners by range; capture-to-pose latency as bag
 receive time minus header stamp (both the Pi's clock, so no inter-machine offset; the stamp is 10-40 ms after
@@ -2673,6 +2778,10 @@ the run. It never compares alternative weightings: it simulates what ran.
 
 
 def main() -> None:
+    try:
+        os.nice(19)
+    except OSError:
+        pass
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     ap.add_argument('target', nargs='?', type=Path, help='a bag folder, or a folder of bags')
     ap.add_argument('--out', type=Path, default=DEFAULT_OUT, help='records folder (default: the report notes)')

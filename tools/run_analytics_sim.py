@@ -21,6 +21,7 @@ sim     The closed loop of mpc_analysis_2026-10-14/sim.py from a start pose: tha
 """
 from __future__ import annotations
 
+import inspect
 import json
 import math
 from pathlib import Path
@@ -38,30 +39,34 @@ def _import(code_dir: str):
     return Ekf, FiducialChain, Mpc, Inputs, Stage, Supervisor
 
 
-def _triple(w) -> np.ndarray:
-    return np.broadcast_to(np.asarray(w, dtype=float), (3,)).copy()
+def _mpc_step(mpc, x, r_gyro, u_prev, y_ref, v_max, r_max, out):
+    """Mpc.step with whatever per-stage settings this commit's supervisor Output carries and its
+    Mpc takes.
+    """
+    takes = inspect.signature(mpc.step).parameters
+    kw = {k: getattr(out, k) for k in ('qw', 'l1_cap') if k in takes and hasattr(out, k)}
+    return mpc.step(x, r_gyro, u_prev, y_ref, v_max, r_max, **kw)
 
 
-def _mpc_step(mpc, x, r_gyro, u_prev, y_ref, v_max, r_max, qw):
-    """Mpc.step with the per-stage tracking multipliers where that commit's Mpc takes them."""
+def _stage_output(sup, Stage, stage: str, resume: str, u_prev, x):
+    """This commit's supervisor Output for a stage, without running its stage machine."""
+    sup.resume = Stage[resume]
     try:
-        return mpc.step(x, r_gyro, u_prev, y_ref, v_max, r_max, qw)
+        return sup._output(Stage[stage], u_prev, x)
     except TypeError:
-        return mpc.step(x, r_gyro, u_prev, y_ref, v_max, r_max)
+        return sup._output(Stage[stage], u_prev)
 
 
 def replay(code_dir: str, req: dict) -> dict:
     """Re-run each logged tick; return per-tick plan and command differences."""
-    _, _, Mpc, _, _, _ = _import(code_dir)
+    _, _, Mpc, _, Stage, Supervisor = _import(code_dir)
     p = req['config']
-    mpc = Mpc(p)
-    qw_app = _triple(p['mpc'].get('qw', 1.0))
-    qw_fin = _triple(p['mpc'].get('qw_final', p['mpc'].get('qw', 1.0)))
+    mpc, sup = Mpc(p), Supervisor(p)
     plan, cmd, ok = [], [], 0
     for tk in req['ticks']:
-        qw = qw_fin if tk['qw_stage'] == 'FINAL' else qw_app
-        res = _mpc_step(mpc, np.asarray(tk['x'], float), tk['r_gyro'], np.asarray(tk['u_prev'], float),
-                        np.asarray(tk['y_ref'], float), tk['v_max'], tk['r_max'], qw)
+        x, u_prev = np.asarray(tk['x'], float), np.asarray(tk['u_prev'], float)
+        out = _stage_output(sup, Stage, tk['stage'], tk['resume'], u_prev, x)
+        res = _mpc_step(mpc, x, tk['r_gyro'], u_prev, np.asarray(tk['y_ref'], float), tk['v_max'], tk['r_max'], out)
         ylog = np.asarray(tk['y_pred'], float).reshape(-1, 3)
         if ylog.shape != res.y_pred.shape:
             plan.append(math.inf)
@@ -143,8 +148,7 @@ def simulate(code_dir: str, req: dict) -> dict:
                 stages.append((round(t, 3), out.stage.name))
             stage = out.stage
             if out.command_enabled:
-                res = _mpc_step(mpc, ekf.x, u_imu[2], cmd, out.y_ref, out.v_max, out.r_max,
-                                getattr(out, 'qw', None))
+                res = _mpc_step(mpc, ekf.x, u_imu[2], cmd, out.y_ref, out.v_max, out.r_max, out)
                 cmd[:] = res.u
             else:
                 cmd[:] = 0.0
