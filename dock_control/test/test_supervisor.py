@@ -11,7 +11,7 @@ def _inputs(**changes):
     """Return armed, healthy inputs with the robot 1 m out, changed as given."""
     values = {'now': 0.0, 'armed': True, 'drive_ok': True,
               'x': np.array([-1.0, 0.1, 0.05, 0.0, 0.0]), 'p_diag': np.full(5, 1e-6),
-              'est_age': 0.004, 'imu_rate': 200.0, 'fix_age': 0.05, 'u_last': np.zeros(3)}
+              'est_age': 0.004, 'imu_rate': 150.0, 'fix_age': 0.05, 'u_last': np.zeros(3)}
     values.update(changes)
     return Inputs(**values)
 
@@ -45,13 +45,14 @@ def test_nominal_run_through_the_table(p):
     assert out.stage == Stage.APPROACH and out.command_enabled
     assert out.y_ref == (-0.3, 0.0, 0.0) and out.v_max == p['lim']['v_approach']
 
+    va, du = p['lim']['v_approach'], p['mpc']['Ts'] * p['lim']['a_max']
     aligned = np.array([-0.26, 0.009, math.radians(0.9), 0.0, 0.0])
-    out = sup.step(_inputs(x=aligned, u_last=np.array([0.3, 0.0, 0.0])))
+    out = sup.step(_inputs(x=aligned, u_last=np.array([va, 0.0, 0.0])))
     assert out.stage == Stage.FINAL and out.y_ref == (0.0, 0.0, 0.0)
-    assert out.v_max == pytest.approx(0.275)        # one increment: v_b has none to give
-    out = sup.step(_inputs(x=aligned, u_last=np.array([0.2, 0.1, 0.0])))
-    assert out.v_max == pytest.approx(0.25)         # both axes moving: 2 du_max
-    out = sup.step(_inputs(x=aligned, u_last=np.array([0.05, 0.02, 0.0])))
+    assert out.v_max == pytest.approx(va - du)      # one increment: v_b has none to give
+    out = sup.step(_inputs(x=aligned, u_last=np.array([va - 0.06, 0.06, 0.0])))
+    assert out.v_max == pytest.approx(va - 2 * du)  # both axes moving: 2 du_max
+    out = sup.step(_inputs(x=aligned, u_last=np.array([0.02, 0.01, 0.0])))
     assert out.v_max == p['lim']['v_final']         # floored at v_final
 
     docked = np.array([-0.002, 0.003, math.radians(1.0), 0.01, 0.0])
@@ -88,22 +89,26 @@ def test_abort_from_a_moving_stage(p, bad):
     assert _approaching(p).step(_inputs(**bad)).stage == Stage.ABORT
 
 
-@pytest.mark.parametrize('bad', [{'imu_rate': 50.0}, {'imu_rate': 0.0}, {'est_age': 0.15},
-                                 {'drive_ok': False}])
+@pytest.mark.parametrize('bad', [{'imu_rate': 50.0}, {'imu_rate': 130.0}, {'imu_rate': 0.0},
+                                 {'est_age': 0.15}, {'drive_ok': False}])
 def test_motion_waits_for_a_healthy_imu_and_drive(p, bad):
-    """ACQUIRE holds until the IMU runs at its rate, the estimate is fresh and the drive is up."""
+    """ACQUIRE holds until the IMU is at 90 % of its rate or more, the estimate fresh, drive up."""
     sup = Supervisor(p)
     sup.step(_inputs(x=None))
     assert sup.step(_inputs(**bad)).stage == Stage.ACQUIRE
-    assert sup.step(_inputs(imu_rate=190.0)).stage == Stage.APPROACH        # within 10 %
+    assert sup.step(_inputs(imu_rate=140.0)).stage == Stage.APPROACH        # 10 % or less below
 
 
-def test_abort_only_on_a_lasting_corridor_excursion(p):
-    """Outside the heading corridor for longer than hold_after_s aborts; a brief excursion not."""
-    off = np.array([-1.0, 0.1, math.radians(21.0), 0.0, 0.0])
+def test_a_fast_imu_does_not_hold_the_start(p):
+    """The EKF steps each sample's interval, so an IMU above imu.rate is no reason to wait."""
+    sup = Supervisor(p)
+    sup.step(_inputs(x=None))
+    assert sup.step(_inputs(imu_rate=181.0)).stage == Stage.APPROACH        # measured max at 150
+
+
+def test_the_heading_never_aborts_the_approach(p):
+    """Far off the board's normal, even for seconds, the supervisor keeps going: the MPC aligns."""
+    off = np.array([-0.45, -0.25, math.radians(32.0), 0.0, 0.0])
     sup = _approaching(p)
-    assert sup.step(_inputs(now=1.0, x=off)).stage == Stage.APPROACH
-    assert sup.step(_inputs(now=1.3, x=off)).stage == Stage.APPROACH
-    assert sup.step(_inputs(now=1.4)).stage == Stage.APPROACH       # back inside: reset
-    assert sup.step(_inputs(now=1.5, x=off)).stage == Stage.APPROACH
-    assert sup.step(_inputs(now=2.1, x=off)).stage == Stage.ABORT
+    for k in range(40):                         # 4 s at 10 Hz
+        assert sup.step(_inputs(now=1.0 + 0.1 * k, x=off)).stage == Stage.APPROACH

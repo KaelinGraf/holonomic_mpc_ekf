@@ -17,9 +17,11 @@ It does two different jobs:
   falling with distance, without changing Output; the verified design and the
   report's results use the two stages.
 
-It also guards the estimate itself: motion starts only with the IMU at its
-configured rate, and any moving stage aborts once the estimate stops arriving
-(a dead IMU node would otherwise leave the MPC steering on a frozen state).
+It also guards the estimate itself: motion starts only with the IMU at 90 % of
+its configured rate or faster (the EKF steps each sample's interval, so a fast
+IMU is no reason to wait, and a slow one is the sign of a failing node), and any
+moving stage aborts once the estimate stops arriving (a dead IMU node would
+otherwise leave the MPC steering on a frozen state).
 
 Thresholds are converted to the units the comparisons use once, in __init__.
 """
@@ -28,8 +30,8 @@ from dataclasses import dataclass
 import enum
 import math
 
-EST_TIMEOUT_S = 0.1     # an estimate older than this is stale: 20 IMU periods, 2 ticks
-IMU_RATE_TOL = 0.1      # start moving only with the IMU within 10 % of imu.rate
+EST_TIMEOUT_S = 0.1     # an estimate older than this is stale: 15 IMU periods, 2 ticks
+IMU_RATE_TOL = 0.1      # start moving only with the IMU no more than 10 % below imu.rate
 
 
 class Stage(enum.IntEnum):
@@ -84,7 +86,7 @@ class Supervisor:
         sup, lim, tol, mpc = p['sup'], p['lim'], p['tol'], p['mpc']
 
         # --- constant, built once ---
-        self.imu_rate = p['imu']['rate']
+        self.imu_rate_min = (1.0 - IMU_RATE_TOL) * p['imu']['rate']
         self.standoff_ref = (-sup['standoff'], 0.0, 0.0)
         self.dock_ref = (0.0, 0.0, 0.0)
         self.align_tol_y = sup['align_tol_m']                 # APPROACH -> FINAL
@@ -99,7 +101,6 @@ class Supervisor:
         self.v_approach = lim['v_approach']
         self.v_final = lim['v_final']
         self.r_max = lim['r_max']
-        self.th_max = math.radians(mpc['th_max_deg'])         # corridor, abort outside it
         # translational increment du_max = T_s a_max, for the FINAL and HOLD cap ramp
         self.du_t = mpc['Ts'] * lim['a_max']
         # Abort when the position variance passes (0.05 m)^2 (brief Sections 7 and 12).
@@ -110,7 +111,6 @@ class Supervisor:
         self.entered_at = 0.0       # when the current stage was entered
         self.resume = Stage.APPROACH    # the stage HOLD returns to
         self.hold_ref = self.dock_ref   # the pose HOLD keeps
-        self.off_corridor_since = None  # when the estimate left the heading corridor
 
     def step(self, inp):
         """
@@ -120,10 +120,6 @@ class Supervisor:
         IDLE from any stage; DOCKED and ABORT stay until the operator disarms.
         """
         stage = self.out.stage
-        if inp.x is None or abs(inp.x[2]) <= self.th_max:
-            self.off_corridor_since = None
-        elif self.off_corridor_since is None:
-            self.off_corridor_since = inp.now
         if not inp.armed:
             nxt = Stage.IDLE
         elif stage in MOVING and self._unsafe(inp):
@@ -160,22 +156,22 @@ class Supervisor:
 
     def _unsafe(self, inp):
         """
-        Return whether to abort a moving stage: drive, estimate, covariance or corridor.
+        Return whether to abort a moving stage: drive lost, estimate stale, or covariance.
 
-        Drive lost, estimate stale, or position variance past (0.05 m)^2 abort
-        at once. The heading corridor is soft in the MPC, so a brief excursion past it is
-        expected (a start near +-20 deg, the initial turn); only one that lasts
-        longer than hold_after_s aborts.
+        Drive lost, estimate stale, or position variance past (0.05 m)^2 abort at
+        once. The heading is not a reason to abort: keeping it aligned with the
+        board is the MPC's job, through the heading term of its cost. (A
+        corridor abort here stopped every start more than 20 deg off the board's
+        normal on the robot, 2026-10-13, since the robot could not turn back in
+        before it fired.)
         """
-        off_corridor = (self.off_corridor_since is not None
-                        and inp.now - self.off_corridor_since > self.hold_after_s)
-        return (not inp.drive_ok or off_corridor or inp.est_age > EST_TIMEOUT_S
+        return (not inp.drive_ok or inp.est_age > EST_TIMEOUT_S
                 or inp.p_diag[0] > self.p_abort or inp.p_diag[1] > self.p_abort)
 
     def _ready(self, inp):
-        """Return whether motion may start: estimate fresh, IMU at its rate, drive armed."""
+        """Return whether to start moving: estimate fresh, IMU >= 90 % of its rate, drive armed."""
         return (inp.x is not None and inp.drive_ok and inp.est_age <= EST_TIMEOUT_S
-                and abs(inp.imu_rate - self.imu_rate) <= IMU_RATE_TOL * self.imu_rate)
+                and inp.imu_rate >= self.imu_rate_min)
 
     def _aligned(self, x):
         """
