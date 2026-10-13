@@ -3,9 +3,10 @@ Closed loop without ROS (brief Section 11; mirrors test_mpc_closed_loop).
 
 The EKF, supervisor and MPC dock a simulated demonstrator: pose kinematics with
 first-order wheel loops (tau = 0.1 s, report Table 5), IMU samples with white
-noise at 200 Hz, and fixes on the 15 Hz grid with the range-dependent noise and
-the 50 ms delay of report Section 4.1. The pass criteria are those of report
-Table 4.
+noise at 150 Hz, and fixes on the 15 Hz grid with the range-dependent noise and
+the 50 ms delay of report Section 4.1. The EKF advances over each sample's
+interval and the MPC ticks on its own 20 Hz grid with the newest estimate, as
+ekf_node and mpc_node do. The pass criteria are those of report Table 4.
 """
 
 import math
@@ -22,36 +23,88 @@ DELAY_S = 0.05          # capture to availability [s]
 
 def test_docks_from_the_report_start_pose(p):
     """Dock from (-2 m, 0.3 m, 15 deg) with the estimator in the loop (report Table 4)."""
+    r = _dock(p, (-2.0, 0.3, 15.0))
+    assert r['stage'] == Stage.DOCKED                              # within 40 s
+    # The lateral error is checked against the coupler tolerance: the 4 mm internal
+    # target is estimator-limited on the demonstrator (26 of 30 runs, report 4.4).
+    assert abs(r['pose'][1]) < p['tol']['y']
+    assert abs(r['pose'][2]) < math.radians(p['tol']['tgt_th_deg'])
+    coast = p['lim']['v_final'] * TAU
+    assert r['max_x'] <= p['mpc']['contact_band'] + coast          # band plus the lag coast
+    assert (r['contact_speed'] or 0.0) < 1.5 * p['lim']['v_final']  # none if it never touched
+    assert r['max_wheel'] <= p['lim']['w_max']
+    assert r['fallbacks'] == 0 and r['rejected'] == 0
+
+
+@pytest.mark.parametrize('start', [(-1.0, 0.3, 60.0), (-1.0, -0.3, -70.0)])
+def test_docks_from_far_off_the_boards_normal(p, start):
+    """No heading corridor: the cost alone brings a start 60-70 deg off the normal into line."""
+    r = _dock(p, start, seconds=60.0)
+    assert r['stage'] == Stage.DOCKED
+    assert abs(r['pose'][1]) < p['tol']['y']
+    assert abs(r['pose'][2]) < math.radians(p['tol']['tgt_th_deg'])
+    assert r['max_x'] <= p['mpc']['contact_band'] + p['lim']['v_final'] * TAU
+    assert r['max_wheel'] <= p['lim']['w_max']
+
+
+@pytest.mark.parametrize('start', [(-0.55, -0.03, 1.0), (-1.0, 0.3, 40.0)])
+def test_the_robots_lag_and_drift_neither_rock_the_heading_nor_leave_it_beside_the_dock(p, start):
+    """
+    The robot of 2026-10-13: wheels lagging 0.15 s, commands 50 ms late, drifting sideways.
+
+    It drifted right by about 15 % of its forward speed. With the design's effort weight
+    (rw 1.0) and the lateral error weighted like the range, this plant rocked the heading
+    +-3 deg with r_b swinging at r_max, as the robot did, and arrived up to 45 mm beside
+    the dock. Now: no limit cycle once FINAL has settled, and on the centre line when
+    50 mm out.
+    """
+    r = _dock(p, start, seconds=60.0, tau=0.15, cmd_delay_s=0.05, drift=-0.15)
+    assert r['stage'] == Stage.DOCKED
+    assert r['final_theta_sd'] < math.radians(1.0)
+    assert r['final_r_max'] < 0.5 * p['lim']['r_max']
+    assert abs(r['y_in']) < 0.006
+
+
+def _dock(p, start, seconds=40.0, tau=TAU, cmd_delay_s=0.0, drift=0.0):
+    """
+    Run the closed loop from start (x, y [m], theta [deg]); return where and how it ended.
+
+    tau is the wheel loops' time constant, cmd_delay_s the delay before a command
+    reaches them, and drift the sideways velocity per unit forward velocity.
+    """
     pytest.importorskip('daqp')
     from dock_control.mpc import Mpc
     rng = np.random.default_rng(1)
     T = 1.0 / p['imu']['rate']
-    tick_every = round(p['mpc']['Ts'] / T)
     delay = round(DELAY_S / T)
     sigma_a, sigma_r = p['imu']['sigma_a'], math.radians(p['imu']['sigma_r_deg'])
     marker = np.array(p['geom']['marker_m'])
-    v_final, x_max = p['lim']['v_final'], p['mpc']['contact_band']
 
     ekf, sup, mpc, chain = Ekf(p), Supervisor(p), Mpc(p), FiducialChain(p)
-    pose = np.array([-2.0, 0.3, math.radians(15.0)])
+    pose = np.array([start[0], start[1], math.radians(start[2])])
     vel = np.zeros(3)                       # body velocity [u, v, r], lagging the command
     cmd = np.zeros(3)
+    sent = [np.zeros(3)] * (round(cmd_delay_s / T) + 1)   # commands on their way to the wheels
+    final, y_in = [], None                  # (t, theta, r_b) in FINAL; y as x passes -50 mm
     inp = Inputs(armed=True, drive_ok=True, u_last=cmd)
-    pending, next_fix, last_fix = [], 0.0, -math.inf
+    pending, next_fix, next_tick, last_fix = [], 0.0, 0.0, -math.inf
     fallbacks = rejected = 0
     max_x, contact_speed, max_wheel = -math.inf, None, 0.0
     stage = Stage.IDLE
 
-    for k in range(round(40.0 / T)):
+    for k in range(round(seconds / T)):
         t = k * T
         # plant: wheel loops, then the pose kinematics
-        acc = (cmd - vel) / TAU
+        applied = sent[0] + np.array((0.0, drift * sent[0][0], 0.0))
+        acc = (applied - vel) / tau
         a_body = (acc[0] - vel[2] * vel[1], acc[1] + vel[2] * vel[0])
         vel = vel + T * acc
         c, s = math.cos(pose[2]), math.sin(pose[2])
         pose = pose + T * np.array((vel[0] * c - vel[1] * s, vel[0] * s + vel[1] * c, vel[2]))
         if pose[0] >= 0.0 and contact_speed is None:
             contact_speed = math.hypot(vel[0], vel[1])
+        if pose[0] >= -0.05 and y_in is None:
+            y_in = pose[1]
         max_x = max(max_x, pose[0])
 
         # camera on the 15 Hz grid, delivered after the delay
@@ -64,7 +117,7 @@ def test_docks_from_the_report_start_pose(p):
         u_imu = np.array((a_body[0] + rng.normal(0.0, sigma_a),
                           a_body[1] + rng.normal(0.0, sigma_a), vel[2] + rng.normal(0.0, sigma_r)))
         if ekf.initialised:
-            ekf.predict(u_imu, t)
+            ekf.advance(u_imu, t)
         while pending and pending[0][0] == k:
             _, z, R, t_capture = pending.pop(0)
             if not ekf.initialised:
@@ -75,7 +128,9 @@ def test_docks_from_the_report_start_pose(p):
             else:
                 rejected += 1
 
-        if k % tick_every == 0:
+        # the MPC on its 20 Hz grid: every 7 or 8 samples at 150 Hz
+        if t >= next_tick:
+            next_tick += p['mpc']['Ts']
             inp.now = t
             if ekf.initialised:
                 inp.x, inp.p_diag = ekf.x.copy(), ekf.P.diagonal().copy()
@@ -91,13 +146,14 @@ def test_docks_from_the_report_start_pose(p):
             else:
                 cmd[:] = 0.0
             max_wheel = max(max_wheel, float(np.abs(mpc.J_inv @ cmd).max()))
+            if stage == Stage.FINAL:
+                final.append((t, pose[2], cmd[2]))
+        sent = sent[1:] + [cmd.copy()]
 
-    assert stage == Stage.DOCKED                                   # within 40 s
-    # The lateral error is checked against the coupler tolerance: the 4 mm internal
-    # target is estimator-limited on the demonstrator (26 of 30 runs, report 4.4).
-    assert abs(pose[1]) < p['tol']['y']
-    assert abs(pose[2]) < math.radians(p['tol']['tgt_th_deg'])
-    assert max_x <= x_max + v_final * TAU                           # band plus the lag coast
-    assert (contact_speed or 0.0) < 1.5 * v_final                  # none if it never touched
-    assert max_wheel <= p['lim']['w_max']
-    assert fallbacks == 0 and rejected == 0
+    # the heading once FINAL has run 3 s, past the turn in at the standoff
+    settled = [(th, r) for tf, th, r in final if tf - final[0][0] >= 3.0] if final else []
+    return {'stage': stage, 'pose': pose, 'max_x': max_x, 'contact_speed': contact_speed,
+            'max_wheel': max_wheel, 'fallbacks': fallbacks, 'rejected': rejected, 't': t,
+            'y_in': y_in,
+            'final_theta_sd': float(np.std([th for th, _ in settled])) if settled else math.nan,
+            'final_r_max': max((abs(r) for _, r in settled), default=math.nan)}
