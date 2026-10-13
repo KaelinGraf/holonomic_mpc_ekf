@@ -28,6 +28,7 @@ import argparse
 import functools
 import json
 import math
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -598,6 +599,10 @@ def finetune(out: Path) -> None:
 
 
 def main() -> None:
+    try:
+        os.nice(19)             # never compete with a live inference node for the CPU
+    except OSError:
+        pass
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     ap.add_argument('step', choices=('prepare', 'infer', 'summarise', 'finetune', 'all'))
     ap.add_argument('arg', nargs='?', default=None)
