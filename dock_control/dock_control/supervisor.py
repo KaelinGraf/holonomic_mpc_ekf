@@ -109,6 +109,15 @@ class Supervisor:
         # while it turns, FINAL locks the heading (the user's design, 2026-10-13).
         self.qw_approach = _triple(mpc.get('qw', 1.0))
         self.qw_final = _triple(mpc.get('qw_final', mpc.get('qw', 1.0)))
+        # APPROACH's multipliers move from qw (far) to qw_near as the distance still to go to
+        # the standoff, along x, falls from qw_ramp_m[0] to qw_ramp_m[1] (smoothstep): the
+        # lateral weight stays low far out, so the plan does not strafe first, and rises in
+        # time for the robot to reach the standoff on the centre line instead of still
+        # strafing across it (the user, 2026-10-14: "it needs to correct in a bit earlier").
+        # Without qw_ramp_m, APPROACH keeps qw.
+        self.qw_near = _triple(mpc.get('qw_near', mpc.get('qw', 1.0)))
+        ramp = sup.get('qw_ramp_m')
+        self.qw_ramp = (float(ramp[0]), float(ramp[1])) if ramp else None
         # translational increment du_max = T_s a_max, for the FINAL and HOLD cap ramp
         self.du_t = mpc['Ts'] * lim['a_max']
         # Abort when the position variance passes (0.05 m)^2 (brief Sections 7 and 12).
@@ -159,7 +168,7 @@ class Supervisor:
             if nxt == Stage.HOLD:
                 self.resume = stage
                 self.hold_ref = (float(inp.x[0]), float(inp.x[1]), float(inp.x[2]))
-        self.out = self._output(nxt, inp.u_last)
+        self.out = self._output(nxt, inp.u_last, inp.x)
         return self.out
 
     def _unsafe(self, inp):
@@ -213,15 +222,26 @@ class Supervisor:
         ub, vb = abs(u_last[0]), abs(u_last[1])
         return max(self.v_final, ub + vb - min(ub, self.du_t) - min(vb, self.du_t))
 
-    def _output(self, stage, u_last):
+    def approach_qw(self, x):
+        """Return APPROACH's tracking multipliers at estimate x (qw_ramp_m: from qw to qw_near)."""
+        if self.qw_ramp is None or x is None:
+            return self.qw_approach
+        far, near = self.qw_ramp
+        to_go = max(0.0, self.standoff_ref[0] - float(x[0]))
+        s = min(1.0, max(0.0, (far - to_go) / (far - near)))
+        s = s * s * (3.0 - 2.0 * s)
+        return tuple(a + s * (b - a) for a, b in zip(self.qw_approach, self.qw_near))
+
+    def _output(self, stage, u_last, x=None):
         if stage == Stage.APPROACH:
             return Output(stage, self.standoff_ref, self.v_approach, self.r_max, True,
-                          self.qw_approach)
+                          self.approach_qw(x))
         if stage == Stage.FINAL:
             return Output(stage, self.dock_ref, self._ramped_cap(u_last), self.r_max, True,
                           self.qw_final, l1_cap=True)
         if stage == Stage.HOLD:
-            qw = self.qw_final if self.resume == Stage.FINAL else self.qw_approach
+            qw = (self.qw_final if self.resume == Stage.FINAL
+                  else self.approach_qw(self.hold_ref))
             return Output(stage, self.hold_ref, self._ramped_cap(u_last), self.r_max, True, qw,
                           l1_cap=True)
         return Output(stage)
