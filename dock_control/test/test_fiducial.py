@@ -118,6 +118,7 @@ def _seen(chain, ahead, right):
 
 def test_signs_by_hand(p):
     """Board poses written down by hand, not through the chain's own constants."""
+    p['geom']['marker_m'][1] = 0.0
     chain = FiducialChain(p)
     lens = p['geom']['cam_xyz'][0]
     docked = p['geom']['marker_m'][0] - lens
@@ -131,3 +132,12 @@ def test_signs_by_hand(p):
     T_OM[:3, 3] = np.array((0.0, 0.0, 1.0)) - R_OM @ chain.c_M
     z = chain.chain(T_OM[:3, :3], T_OM[:3, 3])[:3]
     assert z[2] == pytest.approx(a, abs=1e-12)
+
+
+def test_a_target_offset_sideways_moves_the_robot_the_other_way(p):
+    """With the board 1 cm left of the target, a robot on its centre line is at y = +1 cm."""
+    p['geom']['marker_m'][1] = 0.010
+    chain = FiducialChain(p)
+    docked = p['geom']['marker_m'][0] - p['geom']['cam_xyz'][0]
+    assert np.allclose(chain.chain(*_seen(chain, docked, 0.0))[:3], (0.0, 0.010, 0.0),
+                       atol=1e-12)
