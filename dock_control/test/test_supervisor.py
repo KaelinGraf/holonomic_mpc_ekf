@@ -52,7 +52,7 @@ def test_nominal_run_through_the_table(p):
     assert out.stage == Stage.FINAL and out.y_ref == (0.0, 0.0, 0.0)
     assert out.v_max == pytest.approx(va - du)
     out = sup.step(_inputs(x=aligned, u_last=np.array([va - 0.06, 0.06, 0.0])))
-    assert out.v_max == pytest.approx(va - 2 * du)
+    assert out.v_max == pytest.approx(va - 0.06 - du)
     out = sup.step(_inputs(x=aligned, u_last=np.array([0.02, 0.01, 0.0])))
     assert out.v_max == p['lim']['v_final']
 

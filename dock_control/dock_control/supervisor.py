@@ -176,8 +176,7 @@ class Supervisor:
         """Return the falling speed cap of FINAL and HOLD, never stepped."""
         if u_last is None:
             return self.v_final
-        ub, vb = abs(u_last[0]), abs(u_last[1])
-        reachable = ub + vb - min(ub, self.du_t) - min(vb, self.du_t)
+        reachable = max(abs(u_last[0]), abs(u_last[1])) - self.du_t
         return max(self.v_final, min(self.v_approach, reachable))
 
     def _output(self, stage, u_last):

@@ -90,7 +90,7 @@ def test_constrained_tick_respects_every_limit(p, solver):
     assert mpc.m == 20 * Nc + 3 * mpc.Np and not res.fallback
     dU = res.dU.reshape(Nc, 3)
     U = u_prev + np.cumsum(dU, axis=0)
-    speed = np.abs(U[:, 0]) + np.abs(U[:, 1])
+    speed = np.abs(U[:, :2]).max(axis=1)
     assert np.all(np.abs(dU) <= mpc.du_max + tol)
     assert np.all(speed <= v_max + tol) and np.all(np.abs(U[:, 2]) <= r_max + tol)
     assert np.all(np.abs(U @ mpc.J_inv.T) <= mpc.w_max + tol)

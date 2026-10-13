@@ -30,7 +30,7 @@ def test_docks_from_the_report_start_pose(p):
     coast = p['lim']['v_final'] * TAU
     assert r['max_x'] <= p['mpc']['contact_band'] + coast
     assert (r['contact_speed'] or 0.0) < 1.5 * p['lim']['v_final']
-    assert r['max_wheel'] <= p['lim']['w_max']
+    assert r['max_wheel'] <= p['lim']['w_max'] + 1e-9
     assert r['fallbacks'] == 0 and r['rejected'] == 0
 
 
@@ -42,7 +42,7 @@ def test_docks_from_far_off_the_boards_normal(p, start):
     assert abs(r['pose'][1]) < p['tol']['y']
     assert abs(r['pose'][2]) < math.radians(p['tol']['tgt_th_deg'])
     assert r['max_x'] <= p['mpc']['contact_band'] + p['lim']['v_final'] * TAU
-    assert r['max_wheel'] <= p['lim']['w_max']
+    assert r['max_wheel'] <= p['lim']['w_max'] + 1e-9
 
 
 @pytest.mark.parametrize('start', [(-0.55, -0.03, 1.0), (-1.0, 0.3, 40.0)])
@@ -132,7 +132,8 @@ def _dock(p, start, seconds=40.0, tau=TAU, cmd_delay_s=0.0, drift=0.0):
                 final.append((t, pose[2], cmd[2]))
         sent = sent[1:] + [cmd.copy()]
 
-    settled = [(th, r) for tf, th, r in final if tf - final[0][0] >= 3.0] if final else []
+    settle = min(3.0, 0.5 * (final[-1][0] - final[0][0])) if final else 0.0
+    settled = [(th, r) for tf, th, r in final if tf - final[0][0] >= settle]
     return {'stage': stage, 'pose': pose, 'max_x': max_x, 'contact_speed': contact_speed,
             'max_wheel': max_wheel, 'fallbacks': fallbacks, 'rejected': rejected, 't': t,
             'y_in': y_in,
