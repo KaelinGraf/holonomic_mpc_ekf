@@ -174,8 +174,9 @@ cd /controller_ws && colcon build && source install/setup.bash
   normal's yaw, laid onto the ground plane, as the planar marker of report eq. 5.
   So the board can be mounted at any rotation in its plane, and which lattice
   corner the pipeline numbers first does not matter. `geom.marker_m` is the board
-  centre in the target frame, (0.326, 0) with the dock's coupler on the board's
-  centre line, and `geom.board_squares` and `board_square_m` place that centre in
+  centre in the target frame, (0.236, 0) with the dock's coupler 35 mm out from
+  the board on its centre line (0.326 until late on 2026-10-13, with it 125 mm
+  out), and `geom.board_squares` and `board_square_m` place that centre in
   the pipeline's board frame. The fix's `roll` reports the board's rotation in
   its plane and `pitch` its normal's elevation; both are monitored only.
 

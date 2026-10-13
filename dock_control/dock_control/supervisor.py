@@ -30,6 +30,8 @@ from dataclasses import dataclass
 import enum
 import math
 
+import numpy as np
+
 EST_TIMEOUT_S = 0.1     # an estimate older than this is stale: 15 IMU periods, 2 ticks
 IMU_RATE_TOL = 0.1      # start moving only with the IMU no more than 10 % below imu.rate
 
@@ -77,6 +79,7 @@ class Output:
     v_max: float = 0.0
     r_max: float = 0.0
     command_enabled: bool = False
+    qw: tuple = (1.0, 1.0, 1.0)     # tracking multipliers [x, y, theta] for this tick's MPC
 
 
 class Supervisor:
@@ -101,6 +104,10 @@ class Supervisor:
         self.v_approach = lim['v_approach']
         self.v_final = lim['v_final']
         self.r_max = lim['r_max']
+        # Tracking multipliers per stage (mpc.qw, mpc.qw_final): APPROACH may arc in
+        # while it turns, FINAL locks the heading (the user's design, 2026-10-13).
+        self.qw_approach = _triple(mpc.get('qw', 1.0))
+        self.qw_final = _triple(mpc.get('qw_final', mpc.get('qw', 1.0)))
         # translational increment du_max = T_s a_max, for the FINAL and HOLD cap ramp
         self.du_t = mpc['Ts'] * lim['a_max']
         # Abort when the position variance passes (0.05 m)^2 (brief Sections 7 and 12).
@@ -205,9 +212,18 @@ class Supervisor:
 
     def _output(self, stage, u_last):
         if stage == Stage.APPROACH:
-            return Output(stage, self.standoff_ref, self.v_approach, self.r_max, True)
+            return Output(stage, self.standoff_ref, self.v_approach, self.r_max, True,
+                          self.qw_approach)
         if stage == Stage.FINAL:
-            return Output(stage, self.dock_ref, self._ramped_cap(u_last), self.r_max, True)
+            return Output(stage, self.dock_ref, self._ramped_cap(u_last), self.r_max, True,
+                          self.qw_final)
         if stage == Stage.HOLD:
-            return Output(stage, self.hold_ref, self._ramped_cap(u_last), self.r_max, True)
+            qw = self.qw_final if self.resume == Stage.FINAL else self.qw_approach
+            return Output(stage, self.hold_ref, self._ramped_cap(u_last), self.r_max, True, qw)
         return Output(stage)
+
+
+def _triple(w):
+    """Return a per-axis weight as a tuple of three floats (a scalar applies to all three)."""
+    a = np.broadcast_to(np.asarray(w, dtype=float), (3,))
+    return tuple(float(v) for v in a)

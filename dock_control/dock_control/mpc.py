@@ -144,8 +144,9 @@ class Mpc:
         # q_w and r_w are tuning multipliers per axis on the derived weights: q_w on
         # the tracking of [x, y, theta], r_w on the effort of [u_b, v_b, r_b] (a scalar
         # applies to all three; q_w defaults to 1).
-        q_w = np.asarray(mpc.get('qw', 1.0), dtype=float)
-        self.q_bar = np.tile(q_w * np.asarray(mpc['Qy'], dtype=float), self.Np)
+        self.Qy = np.asarray(mpc['Qy'], dtype=float)
+        self.q_w = np.broadcast_to(np.asarray(mpc.get('qw', 1.0), dtype=float), (3,)).copy()
+        self.q_bar = np.tile(self.q_w * self.Qy, self.Np)
         self.r_bar = np.tile(np.asarray(mpc['rw'], dtype=float)
                              * np.asarray(mpc['Ru'], dtype=float), self.Nc)
         self.J_inv = kinematics.ik_matrix(g['Rw'], g['lx'], g['ly'])
@@ -277,7 +278,7 @@ class Mpc:
         np.minimum(u, INF, out=u)                       # a limit set to inf means no limit
         return A[:self.m, :n], u[:self.m]
 
-    def step(self, x_hat, r_gyro, u_prev, y_ref, v_max, r_max):
+    def step(self, x_hat, r_gyro, u_prev, y_ref, v_max, r_max, qw=None):
         """
         Run one tick and return an MpcResult (brief Section 6, steps 1-8).
 
@@ -293,8 +294,15 @@ class Mpc:
            y_pred = F x_p + Phi dU as Np x 3.
         8. Otherwise fall back: decelerate each axis towards zero by its largest
            increment, and set fallback.
+
+        qw, if given, replaces the tracking multipliers [x, y, theta] for this tick
+        and those after it (the supervisor's per-stage schedule: FINAL locks the
+        heading); Q_bar is only rebuilt when it changes.
         """
         n, Np, Nc, Ts = self.n, self.Np, self.Nc, self.Ts
+        if qw is not None and not np.array_equal(qw, self.q_w):
+            self.q_w = np.array(qw, dtype=float)
+            self.q_bar = np.tile(self.q_w * self.Qy, Np)
         x_p = np.array((Ts * x_hat[3], Ts * x_hat[4], Ts * r_gyro, x_hat[0], x_hat[1], x_hat[2]))
         A, B = linearise(x_hat[:3], u_prev, Ts)
         F, Phi = predict_matrices(*augment(A, B), Np, Nc)
