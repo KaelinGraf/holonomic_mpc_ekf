@@ -122,7 +122,8 @@ def _dock(p, start, seconds=40.0, tau=TAU, cmd_delay_s=0.0, drift=0.0):
             if stage == Stage.DOCKED:
                 break
             if out.command_enabled:
-                res = mpc.step(ekf.x, u_imu[2], cmd, out.y_ref, out.v_max, out.r_max, out.qw)
+                res = mpc.step(ekf.x, u_imu[2], cmd, out.y_ref, out.v_max, out.r_max, out.qw,
+                               out.l1_cap)
                 fallbacks += res.fallback
                 cmd[:] = res.u
             else:

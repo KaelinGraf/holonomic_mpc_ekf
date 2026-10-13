@@ -97,3 +97,26 @@ def test_constrained_tick_respects_every_limit(p, solver):
     assert np.all(res.y_pred[:, 0] <= mpc.x_max + res.slack + tol)
     assert np.all(np.abs(res.y_pred[:, 2]) <= mpc.th_max + res.slack + tol)
     assert speed.max() == pytest.approx(v_max, abs=tol)
+
+
+@pytest.mark.parametrize('solver', ['daqp', 'osqp'])
+def test_the_l1_cap_shares_the_speed_between_the_axes(p, solver):
+    """With l1_cap (FINAL, HOLD) |u_b| + |v_b| stays under the cap; per axis, the sum can exceed
+    it.
+    """
+    pytest.importorskip(solver)
+    from dock_control.mpc import Mpc
+    mpc = Mpc(p, solver)
+    Nc, tol, v_max, r_max = mpc.Nc, 1e-3, 0.09, p['lim']['r_max']
+    x_hat, u_prev = np.array([-0.3, 0.2, 0.0, 0.0, 0.0]), np.zeros(3)
+
+    def planned(l1_cap):
+        res = mpc.step(x_hat, 0.0, u_prev, (0.0, 0.0, 0.0), v_max, r_max, None, l1_cap)
+        assert not res.fallback
+        return u_prev + np.cumsum(res.dU.reshape(Nc, 3), axis=0)
+
+    for _ in range(2):
+        per_axis, l1 = planned(False), planned(True)
+        assert np.all(np.abs(per_axis[:, :2]) <= v_max + tol)
+        assert (np.abs(per_axis[:, 0]) + np.abs(per_axis[:, 1])).max() > v_max + 0.01
+        assert np.all(np.abs(l1[:, 0]) + np.abs(l1[:, 1]) <= v_max + tol)

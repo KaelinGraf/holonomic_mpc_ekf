@@ -79,6 +79,7 @@ class Output:
     r_max: float = 0.0
     command_enabled: bool = False
     qw: tuple = (1.0, 1.0, 1.0)
+    l1_cap: bool = False
 
 
 class Supervisor:
@@ -176,8 +177,8 @@ class Supervisor:
         """Return the falling speed cap of FINAL and HOLD, never stepped."""
         if u_last is None:
             return self.v_final
-        reachable = max(abs(u_last[0]), abs(u_last[1])) - self.du_t
-        return max(self.v_final, min(self.v_approach, reachable))
+        ub, vb = abs(u_last[0]), abs(u_last[1])
+        return max(self.v_final, ub + vb - min(ub, self.du_t) - min(vb, self.du_t))
 
     def _output(self, stage, u_last):
         if stage == Stage.APPROACH:
@@ -185,10 +186,11 @@ class Supervisor:
                           self.qw_approach)
         if stage == Stage.FINAL:
             return Output(stage, self.dock_ref, self._ramped_cap(u_last), self.r_max, True,
-                          self.qw_final)
+                          self.qw_final, l1_cap=True)
         if stage == Stage.HOLD:
             qw = self.qw_final if self.resume == Stage.FINAL else self.qw_approach
-            return Output(stage, self.hold_ref, self._ramped_cap(u_last), self.r_max, True, qw)
+            return Output(stage, self.hold_ref, self._ramped_cap(u_last), self.r_max, True, qw,
+                          l1_cap=True)
         return Output(stage)
 
 

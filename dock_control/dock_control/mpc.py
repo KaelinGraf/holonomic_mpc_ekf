@@ -42,8 +42,10 @@ DAQP_SOLVED = (1, 2)
 INF = 1e30
 SLACK_WEIGHT = 2e2
 
-A_AMP = np.array([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0],
-                  [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]])
+A_AMP_AXIS = np.array([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0],
+                       [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]])
+A_AMP_L1 = np.array([[1.0, 1.0, 0.0], [1.0, -1.0, 0.0], [-1.0, 1.0, 0.0], [-1.0, -1.0, 0.0],
+                     [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]])
 
 
 def f_c(x_c, u, Ts):
@@ -132,8 +134,11 @@ class Mpc:
                              * np.asarray(mpc['Ru'], dtype=float), self.Nc)
         self.J_inv = kinematics.ik_matrix(g['Rw'], g['lx'], g['ly'])
         self.A_wheel = np.vstack((self.J_inv, -self.J_inv))
-        self.M_const = self._constant_rows()
+        self.M_const = self._constant_rows(A_AMP_AXIS)
         self.amp = slice(2 * n, 2 * n + 6 * self.Nc)
+        self.M_amp = {False: self.M_const[self.amp].copy(),
+                      True: self._constant_rows(A_AMP_L1)[self.amp]}
+        self.l1 = False
         self.wheel = slice(self.amp.stop, self.M_const.shape[0])
         k = self.wheel.stop
         self.pen = slice(k, k + self.Np)
@@ -165,13 +170,13 @@ class Mpc:
 
         self.z_prev = None
 
-    def _constant_rows(self):
+    def _constant_rows(self, a_amp):
         """Return rows 0-199 of M, the 200 x 3Nc block whose left-hand side never changes."""
         Nc = self.Nc
         C2 = np.kron(np.tril(np.ones((Nc, Nc))), np.eye(3))
         I_n = np.eye(3 * Nc)
         return np.vstack((I_n, -I_n,
-                          np.kron(np.eye(Nc), A_AMP) @ C2,
+                          np.kron(np.eye(Nc), a_amp) @ C2,
                           np.kron(np.eye(Nc), self.A_wheel) @ C2))
 
     def _setup_osqp(self):
@@ -181,7 +186,9 @@ class Mpc:
         n, m, k = self.n, self.m, self.wheel.stop
         P_rows, P_cols = np.triu_indices(n)
         P_rows, P_cols = np.append(P_rows, n), np.append(P_cols, n)
-        c_rows, c_cols = np.nonzero(self.M_const)
+        union = self.M_const != 0.0
+        union[self.amp] = (self.M_amp[False] != 0.0) | (self.M_amp[True] != 0.0)
+        c_rows, c_cols = np.nonzero(union)
         o_rows, o_cols = np.divmod(np.arange((m - k) * n), n)
         A_rows = np.concatenate((c_rows, k + o_rows, np.arange(k, m + 1)))
         A_cols = np.concatenate((c_cols, o_cols, np.full(m + 1 - k, n)))
@@ -204,7 +211,8 @@ class Mpc:
         """Write this tick's M (320 x 3Nc) and gamma (320) and return them (report Section 3.4)."""
         n, Nc, A, u = self.n, self.Nc, self.A_ext, self.u_ext
         caps = np.array((v_max, v_max, v_max, v_max, r_max, r_max))
-        u[self.amp] = np.tile(caps - A_AMP @ u_prev, Nc)
+        a_amp = A_AMP_L1 if self.l1 else A_AMP_AXIS
+        u[self.amp] = np.tile(caps - a_amp @ u_prev, Nc)
         u[self.wheel] = np.tile(self.w_max - self.A_wheel @ u_prev, Nc)
         Phi_th = Phi[2::3]
         A[self.pen, :n] = Phi[0::3]
@@ -216,12 +224,15 @@ class Mpc:
         np.minimum(u, INF, out=u)
         return A[:self.m, :n], u[:self.m]
 
-    def step(self, x_hat, r_gyro, u_prev, y_ref, v_max, r_max, qw=None):
+    def step(self, x_hat, r_gyro, u_prev, y_ref, v_max, r_max, qw=None, l1_cap=False):
         """Run one tick and return an MpcResult (brief Section 6, steps 1-8)."""
         n, Np, Nc, Ts = self.n, self.Np, self.Nc, self.Ts
         if qw is not None and not np.array_equal(qw, self.q_w):
             self.q_w = np.array(qw, dtype=float)
             self.q_bar = np.tile(self.q_w * self.Qy, Np)
+        if bool(l1_cap) != self.l1:
+            self.l1 = bool(l1_cap)
+            self.A_ext[self.amp, :n] = self.M_amp[self.l1]
         x_p = np.array((Ts * x_hat[3], Ts * x_hat[4], Ts * r_gyro, x_hat[0], x_hat[1], x_hat[2]))
         A, B = linearise(x_hat[:3], u_prev, Ts)
         F, Phi = predict_matrices(*augment(A, B), Np, Nc)
