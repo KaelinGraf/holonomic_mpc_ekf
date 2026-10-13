@@ -64,6 +64,16 @@
 #     until the coupler (53 mm off at x = -40 mm), where 0.03 m/s could not strafe it.
 #     In simulation with the lag, that drift and the 40 deg camera field of view, the
 #     robot now arrives within 5 mm of the centre line and keeps the board in view.
+#   - 2026-10-14, after the user saw it strafe hard while far out, overshoot and come back
+#     (the cause: mpc_analysis_2026-10-14 in the report notes): the speed cap is per axis,
+#     |u_b| <= v_max and |v_b| <= v_max (Mpc.A_AMP; the user's choice), not |u_b| + |v_b|,
+#     under which the whole budget went to one axis. APPROACH's lateral weight is a quarter
+#     (qw y 0.25: 15625, 2.25 times the range's, from 9 times); FINAL keeps the full weight
+#     for the 4 mm docking target. Simulated with the drive as measured on the robot (0.84x
+#     forward, 0.57x strafe, 0.15 s lag, 42 deg half field of view), five starts 0.8-1.2 m out,
+#     up to 30 cm and 30 deg off: 5 of 5 dock (the L1 cap: 4, one aborted with the board out
+#     of view), 0.21-0.24 m of forward progress in the first 2 s (0.04-0.24), at most 13 mm
+#     past the centre line.
 # - imu.sigma_a and imu.sigma_r_deg were measured on the robot (2026-10-13: the
 #   standard deviation of 60 s at rest, at 150 Hz) and replace the bench values
 #   0.02 m/s^2 and 0.15 deg/s.
@@ -90,6 +100,6 @@ dock:
   geom: {Rw: 0.0275, lx: 0.0765, ly: 0.089, Lk: 0.201, cam_xyz: [0.070, 0.0, 0.08], marker_m: [0.241, 0.010], marker_psi0_deg: 180,
          board_squares: [5, 5], board_square_m: 0.0405}   # measured, cam z a guess
   lim:  {v_approach: 0.18, v_final: 0.09, a_max: 0.5, r_max: 0.30, alpha_max: 1.0, w_max: 9.0}   # speeds at 60%; w_max: measure
-  mpc:  {Ts: 0.05, Np: 80, Nc: 10, rw: [16, 16, 64], qw: [1, 1, 2], qw_final: [1, 1, 10], contact_band: 0.010, th_max_deg: 180, Qy: [6944, 62500, 1459], Ru: [1600, 1600, 400], rho_s: 5.8e+6}
+  mpc:  {Ts: 0.05, Np: 80, Nc: 10, rw: [16, 16, 64], qw: [1, 0.25, 2], qw_final: [1, 1, 10], contact_band: 0.010, th_max_deg: 180, Qy: [6944, 62500, 1459], Ru: [1600, 1600, 400], rho_s: 5.8e+6}
   sup:  {standoff: 0.04, align_tol_m: 0.03, align_tol_deg: 5.0, standoff_tol: 0.02, dock_tol: 0.005, dock_vtol: 0.02, hold_after_s: 0.5, abort_after_s: 2.0}
   tol:  {y: 0.012, th_deg: 20, tgt_y: 0.004, tgt_th_deg: 1.5}

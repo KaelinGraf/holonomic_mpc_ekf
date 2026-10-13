@@ -199,15 +199,13 @@ class Supervisor:
         Return the falling speed cap of FINAL and HOLD, never stepped.
 
         A cap below what one tick of increments can reach leaves the hard
-        amplitude rows infeasible. Each of |u_b| and |v_b| can fall by at most
-        du_max, so the cap falls by min(|u_b|, du_max) + min(|v_b|, du_max): the
-        brief's 2 du_max when both are moving, but only du_max when driving
-        straight in (v_b = 0), where 2 du_max cannot be reached.
+        amplitude rows infeasible. The cap holds each of |u_b| and |v_b| on its
+        own (Mpc's per-axis amplitude rows), and each can fall by at most du_max
+        a tick, so the cap falls by du_max from the faster of the two.
         """
         if u_last is None:
             return self.v_final
-        ub, vb = abs(u_last[0]), abs(u_last[1])
-        reachable = ub + vb - min(ub, self.du_t) - min(vb, self.du_t)
+        reachable = max(abs(u_last[0]), abs(u_last[1])) - self.du_t
         return max(self.v_final, min(self.v_approach, reachable))
 
     def _output(self, stage, u_last):

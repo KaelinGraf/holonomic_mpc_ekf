@@ -45,9 +45,12 @@ DAQP_SOLVED = (1, 2)        # exitflag: optimal, soft optimal
 INF = 1e30                  # what both solvers read as no bound
 SLACK_WEIGHT = 2e2          # E_ext = blkdiag(E, 2e2) (brief Section 6, step 6)
 
-# Amplitude rows for one step u = [u_b, v_b, r_b]: the four facets of the L1
-# speed cap |u_b| + |v_b| <= v_max, then |r_b| <= r_max.
-A_AMP = np.array([[1.0, 1.0, 0.0], [1.0, -1.0, 0.0], [-1.0, 1.0, 0.0], [-1.0, -1.0, 0.0],
+# Amplitude rows for one step u = [u_b, v_b, r_b]: each axis capped on its own,
+# |u_b| <= v_max and |v_b| <= v_max, then |r_b| <= r_max. The user's choice
+# (2026-10-14) over the brief's L1 cap |u_b| + |v_b| <= v_max, under which the
+# plan spent the whole cap on one axis, strafing at full speed with no forward
+# motion. The wheel-speed rows (w_max) still bound a diagonal move.
+A_AMP = np.array([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0],
                   [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]])
 
 
@@ -201,7 +204,7 @@ class Mpc:
         U = C1 u(k-1) + C2 dU (report Section 3.4):
 
             increments    |du(k+j)| <= du_max                    6 Nc rows
-            amplitudes    |u_b| + |v_b| <= v_max (four facets)
+            amplitudes    |u_b| <= v_max, |v_b| <= v_max
                           and |r_b| <= r_max, on C2 dU           6 Nc rows
             wheel speeds  |(I_Nc kron J^-) C2 dU| <= w_max       8 Nc rows
 

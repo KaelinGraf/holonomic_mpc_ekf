@@ -50,9 +50,9 @@ def test_nominal_run_through_the_table(p):
     aligned = np.array([-s0 + 0.5 * p['sup']['standoff_tol'], 0.009, math.radians(0.9), 0.0, 0.0])
     out = sup.step(_inputs(x=aligned, u_last=np.array([va, 0.0, 0.0])))
     assert out.stage == Stage.FINAL and out.y_ref == (0.0, 0.0, 0.0)
-    assert out.v_max == pytest.approx(va - du)      # one increment: v_b has none to give
+    assert out.v_max == pytest.approx(va - du)      # one increment off the faster axis
     out = sup.step(_inputs(x=aligned, u_last=np.array([va - 0.06, 0.06, 0.0])))
-    assert out.v_max == pytest.approx(va - 2 * du)  # both axes moving: 2 du_max
+    assert out.v_max == pytest.approx(va - 0.06 - du)   # per-axis cap: the faster axis sets it
     out = sup.step(_inputs(x=aligned, u_last=np.array([0.02, 0.01, 0.0])))
     assert out.v_max == p['lim']['v_final']         # floored at v_final
 
