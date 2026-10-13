@@ -17,9 +17,11 @@ It does two different jobs:
   falling with distance, without changing Output; the verified design and the
   report's results use the two stages.
 
-It also guards the estimate itself: motion starts only with the IMU at its
-configured rate, and any moving stage aborts once the estimate stops arriving
-(a dead IMU node would otherwise leave the MPC steering on a frozen state).
+It also guards the estimate itself: motion starts only with the IMU at 90 % of
+its configured rate or faster (the EKF steps each sample's interval, so a fast
+IMU is no reason to wait, and a slow one is the sign of a failing node), and any
+moving stage aborts once the estimate stops arriving (a dead IMU node would
+otherwise leave the MPC steering on a frozen state).
 
 Thresholds are converted to the units the comparisons use once, in __init__.
 """
@@ -82,7 +84,7 @@ class Supervisor:
     def __init__(self, p):
         sup, lim, tol, mpc = p['sup'], p['lim'], p['tol'], p['mpc']
 
-        self.imu_rate = p['imu']['rate']
+        self.imu_rate_min = (1.0 - IMU_RATE_TOL) * p['imu']['rate']
         self.standoff_ref = (-sup['standoff'], 0.0, 0.0)
         self.dock_ref = (0.0, 0.0, 0.0)
         self.align_tol_y = sup['align_tol_m']
@@ -97,7 +99,6 @@ class Supervisor:
         self.v_approach = lim['v_approach']
         self.v_final = lim['v_final']
         self.r_max = lim['r_max']
-        self.th_max = math.radians(mpc['th_max_deg'])
         self.du_t = mpc['Ts'] * lim['a_max']
         self.p_abort = 0.05 ** 2
 
@@ -105,15 +106,10 @@ class Supervisor:
         self.entered_at = 0.0
         self.resume = Stage.APPROACH
         self.hold_ref = self.dock_ref
-        self.off_corridor_since = None
 
     def step(self, inp):
         """Advance the stage machine one tick and return the Output to publish."""
         stage = self.out.stage
-        if inp.x is None or abs(inp.x[2]) <= self.th_max:
-            self.off_corridor_since = None
-        elif self.off_corridor_since is None:
-            self.off_corridor_since = inp.now
         if not inp.armed:
             nxt = Stage.IDLE
         elif stage in MOVING and self._unsafe(inp):
@@ -148,16 +144,14 @@ class Supervisor:
         return self.out
 
     def _unsafe(self, inp):
-        """Return whether to abort a moving stage: drive, estimate, covariance or corridor."""
-        off_corridor = (self.off_corridor_since is not None
-                        and inp.now - self.off_corridor_since > self.hold_after_s)
-        return (not inp.drive_ok or off_corridor or inp.est_age > EST_TIMEOUT_S
+        """Return whether to abort a moving stage: drive lost, estimate stale, or covariance."""
+        return (not inp.drive_ok or inp.est_age > EST_TIMEOUT_S
                 or inp.p_diag[0] > self.p_abort or inp.p_diag[1] > self.p_abort)
 
     def _ready(self, inp):
-        """Return whether motion may start: estimate fresh, IMU at its rate, drive armed."""
+        """Return whether to start moving: estimate fresh, IMU >= 90 % of its rate, drive armed."""
         return (inp.x is not None and inp.drive_ok and inp.est_age <= EST_TIMEOUT_S
-                and abs(inp.imu_rate - self.imu_rate) <= IMU_RATE_TOL * self.imu_rate)
+                and inp.imu_rate >= self.imu_rate_min)
 
     def _aligned(self, x):
         """
