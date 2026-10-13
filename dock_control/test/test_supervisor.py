@@ -1,5 +1,6 @@
 """The supervisor against the stage table of brief Section 7."""
 
+import copy
 import math
 
 from dock_control.supervisor import Inputs, Stage, Supervisor
@@ -117,3 +118,30 @@ def test_the_heading_never_aborts_the_approach(p):
     sup = _approaching(p)
     for k in range(40):
         assert sup.step(_inputs(now=1.0 + 0.1 * k, x=off)).stage == Stage.APPROACH
+
+
+def test_approach_weights_ramp_from_far_to_near_with_the_distance_to_go(p):
+    """
+    mpc.qw far out, mpc.qw_near close in, smoothstep between sup.qw_ramp_m along x.
+
+    The lateral correction should start a bit earlier (2026-10-14).
+    """
+    q = copy.deepcopy(p)
+    q['mpc']['qw'], q['mpc']['qw_near'] = [1.0, 0.25, 2.0], [1.0, 1.0, 2.0]
+    q['sup']['qw_ramp_m'] = [0.8, 0.25]
+    sup = Supervisor(q)
+    s0 = q['sup']['standoff']
+
+    def at(to_go):
+        return sup.approach_qw(np.array([-s0 - to_go, 0.05, 0.0, 0.0, 0.0]))
+    assert at(1.5) == pytest.approx((1.0, 0.25, 2.0))
+    assert at(0.8) == pytest.approx((1.0, 0.25, 2.0))
+    assert at(0.25) == pytest.approx((1.0, 1.0, 2.0)) and at(0.0) == pytest.approx((1.0, 1.0, 2.0))
+    assert at(0.525)[1] == pytest.approx(0.625)
+    assert at(0.6)[1] < at(0.5)[1] < at(0.4)[1]
+    sup.step(_inputs(x=None))
+    out = sup.step(_inputs(x=np.array([-s0 - 0.3, 0.05, 0.0, 0.0, 0.0])))
+    assert out.stage == Stage.APPROACH and out.qw == pytest.approx(at(0.3))
+    q['sup'].pop('qw_ramp_m')
+    plain = Supervisor(q)
+    assert plain.approach_qw(np.array([-s0 - 0.3, 0.0, 0.0, 0.0, 0.0])) == plain.qw_approach

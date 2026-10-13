@@ -84,6 +84,7 @@ def test_optical_axes(p):
 
 def test_board_seen_square_on_is_the_identity(p):
     """Facing the board squarely gives R = I, as OpenCV reports a board facing the camera."""
+    p['geom']['marker_psi0_deg'] = 180.0
     T_OM = _board_in_camera(FiducialChain(p), (-0.5, 0.0, 0.0))
     assert np.allclose(T_OM[:3, :3], np.eye(3))
 
@@ -119,6 +120,7 @@ def _seen(chain, ahead, right):
 def test_signs_by_hand(p):
     """Board poses written down by hand, not through the chain's own constants."""
     p['geom']['marker_m'][1] = 0.0
+    p['geom']['marker_psi0_deg'] = 180.0
     chain = FiducialChain(p)
     lens = p['geom']['cam_xyz'][0]
     docked = p['geom']['marker_m'][0] - lens
@@ -137,6 +139,7 @@ def test_signs_by_hand(p):
 def test_a_target_offset_sideways_moves_the_robot_the_other_way(p):
     """With the board 1 cm left of the target, a robot on its centre line is at y = +1 cm."""
     p['geom']['marker_m'][1] = 0.010
+    p['geom']['marker_psi0_deg'] = 180.0
     chain = FiducialChain(p)
     docked = p['geom']['marker_m'][0] - p['geom']['cam_xyz'][0]
     assert np.allclose(chain.chain(*_seen(chain, docked, 0.0))[:3], (0.0, 0.010, 0.0),
