@@ -2,6 +2,7 @@
 # After a session: copy the Pi's docking bags to the laptop, then record every new run.
 #
 #     tools/pull_pi_bags.sh                              # the Pi as ssh's "pi" host (Ethernet pi-share)
+#     PI=p4p@10.43.0.2 tools/pull_pi_bags.sh             # over the Pi's hotspot (p4p-dock-pi)
 #     PI=p4p@172.23.152.148 tools/pull_pi_bags.sh        # over the university WiFi
 #     tools/pull_pi_bags.sh --detectors                  # extra arguments go to run_analytics.py
 #
@@ -24,7 +25,9 @@ mkdir -p "$DEST"
 echo "copying $PI:$SRC -> $DEST"
 rsync -a --info=progress2,stats1 "$PI:$SRC" "$DEST"
 
-args=$(printf '%q ' "$@")
+# printf with no arguments would still print '' once, which run_analytics.py rejects
+args=""
+[ $# -gt 0 ] && args=$(printf '%q ' "$@")
 echo "recording the runs in $CONTAINER"
 docker exec "$CONTAINER" bash -lc "source /workspace/controller_ws/install/setup.bash && \
     source /workspace/Conv-ChArT-Wireless-Inference/src/ros/install/setup.bash && \
