@@ -268,7 +268,7 @@ class Mpc:
         """Forget the warm start, for a new run from rest."""
         self.z_prev = None
 
-    def constraints(self, Phi, Fx, u_prev, v_max, r_max):
+    def constraints(self, Phi, Fx, u_prev, v_max, r_max, v_lat_max=None):
         """
         Write this tick's M (320 x 3Nc) and gamma (320) and return them (report Section 3.4).
 
@@ -284,7 +284,8 @@ class Mpc:
         next tick.
         """
         n, Nc, A, u = self.n, self.Nc, self.A_ext, self.u_ext
-        caps = np.array((v_max, v_max, v_max, v_max, r_max, r_max))
+        v_lat = v_max if v_lat_max is None or self.l1 else v_lat_max
+        caps = np.array((v_max, v_max, v_lat, v_lat, r_max, r_max))  # L1: all four facets v_max
         a_amp = A_AMP_L1 if self.l1 else A_AMP_AXIS
         u[self.amp] = np.tile(caps - a_amp @ u_prev, Nc)
         u[self.wheel] = np.tile(self.w_max - self.A_wheel @ u_prev, Nc)
@@ -298,7 +299,8 @@ class Mpc:
         np.minimum(u, INF, out=u)                       # a limit set to inf means no limit
         return A[:self.m, :n], u[:self.m]
 
-    def step(self, x_hat, r_gyro, u_prev, y_ref, v_max, r_max, qw=None, l1_cap=False):
+    def step(self, x_hat, r_gyro, u_prev, y_ref, v_max, r_max, qw=None, l1_cap=False,
+             v_lat_max=None):
         """
         Run one tick and return an MpcResult (brief Section 6, steps 1-8).
 
@@ -320,7 +322,8 @@ class Mpc:
         heading); Q_bar is only rebuilt when it changes. l1_cap picks the speed
         cap's shape, |u_b| + |v_b| <= v_max if true, else each axis on its own (the
         supervisor's: L1 in FINAL and HOLD); the amplitude block is only swapped
-        when it changes.
+        when it changes. v_lat_max, if given, caps |v_b| apart from |u_b| under the per-axis
+        rows (FINAL's straight-in: the robot must not strafe at the coupler).
         """
         n, Np, Nc, Ts = self.n, self.Np, self.Nc, self.Ts
         if qw is not None and not np.array_equal(qw, self.q_w):
@@ -339,7 +342,7 @@ class Mpc:
         E[self.r_diag] += 2.0 * self.r_bar
         self.E_ext[:n, :n] = E
         self.q_ext[:n] = -2.0 * (QPhi.T @ (np.tile(y_ref, Np) - Fx))
-        self.constraints(Phi, Fx, u_prev, v_max, r_max)
+        self.constraints(Phi, Fx, u_prev, v_max, r_max, v_lat_max)
 
         z, flag = self._solve()
         if z is not None:

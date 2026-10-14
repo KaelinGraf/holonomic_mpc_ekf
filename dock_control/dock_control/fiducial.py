@@ -86,6 +86,12 @@ class FiducialChain:
         self.sigma_p0 = fid['sigma_p0']
         self.inv_d0_sq = 1.0 / fid['d0'] ** 2
         self.sigma_th = math.radians(fid['sigma_th_deg'])
+        # Floor on a fix's heading noise (fid.sigma_th_floor_deg). The pipeline's covariance put
+        # it at 0.03-0.18 deg, but against the EKF the fixes scattered 0.66 deg RMS over a run,
+        # and 0.4-2.7 deg at the coupler as the robot pressed and tilted against it, so the gate
+        # turned away fixes whose position agreed within 1 sd (run_records, 2026-10-14).
+        floor = fid.get('sigma_th_floor_deg')
+        self.var_th_floor = math.radians(floor) ** 2 if floor else 0.0
 
     def chain(self, R_OM, t_OM):
         """
@@ -150,10 +156,13 @@ class FiducialChain:
         pose_cov is RosInferenceResult.pose.covariance: the pipeline's measured
         noise for this frame, in PoseWithCovariance order in the optical frame.
         R = J pose_cov J' (see linearise) is a full 3x3: the x, y and theta
-        errors of a pose are correlated, and the EKF keeps that.
+        errors of a pose are correlated, and the EKF keeps that. The heading variance is
+        raised to fid.sigma_th_floor_deg squared where the pipeline claims less.
         """
         z, roll, pitch, J = self.linearise(R_OM, t_OM)
-        return z, J @ pose_cov @ J.T, roll, pitch
+        R = J @ pose_cov @ J.T
+        R[2, 2] = max(R[2, 2], self.var_th_floor)     # never more sure of heading than the floor
+        return z, R, roll, pitch
 
     def sigma_p(self, d):
         """Return the simulated position standard deviation at range d (report Section 2.2)."""

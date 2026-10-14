@@ -63,7 +63,9 @@ def test_the_robots_lag_and_drift_neither_rock_the_heading_nor_leave_it_beside_t
     r = _dock(p, start, seconds=60.0, tau=0.15, cmd_delay_s=0.05, drift=-0.15)
     assert r['stage'] == Stage.DOCKED
     assert r['final_theta_sd'] < math.radians(1.0)
-    assert r['final_r_max'] < 0.5 * p['lim']['r_max']
+    # no limit cycle: r_b never swings back and forth; one heading correction may reach 0.6 r_max
+    # in the 80 mm straight-in plunge of 2026-10-14 (0.158 rad/s against 0.15 before)
+    assert r['final_r_reversals'] == 0 and r['final_r_max'] < 0.6 * p['lim']['r_max']
     assert abs(r['y_in']) < 0.015      # FINAL at 0.09 m/s leaves less time to fix the drift
 
 
@@ -137,13 +139,14 @@ def _dock(p, start, seconds=40.0, tau=TAU, cmd_delay_s=0.0, drift=0.0):
             if ekf.initialised:
                 inp.x, inp.p_diag = ekf.x.copy(), ekf.P.diagonal().copy()
                 inp.fix_age, inp.est_age, inp.imu_rate = t - last_fix, 0.0, 1.0 / T
+                inp.r_gyro = float(u_imu[2])
             out = sup.step(inp)
             stage = out.stage
             if stage == Stage.DOCKED:
                 break
             if out.command_enabled:
                 res = mpc.step(ekf.x, u_imu[2], cmd, out.y_ref, out.v_max, out.r_max, out.qw,
-                               out.l1_cap)
+                               out.l1_cap, out.v_lat_max)
                 fallbacks += res.fallback
                 cmd[:] = res.u
             else:
@@ -161,4 +164,6 @@ def _dock(p, start, seconds=40.0, tau=TAU, cmd_delay_s=0.0, drift=0.0):
             'max_wheel': max_wheel, 'fallbacks': fallbacks, 'rejected': rejected, 't': t,
             'y_in': y_in,
             'final_theta_sd': float(np.std([th for th, _ in settled])) if settled else math.nan,
-            'final_r_max': max((abs(r) for _, r in settled), default=math.nan)}
+            'final_r_max': max((abs(r) for _, r in settled), default=math.nan),
+            'final_r_reversals': sum(1 for (_, a), (_, b) in zip(settled, settled[1:])
+                                     if a * b < 0.0 and abs(a - b) > 0.1)}

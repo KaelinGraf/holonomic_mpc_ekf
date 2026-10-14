@@ -128,3 +128,16 @@ def test_the_l1_cap_shares_the_speed_between_the_axes(p, solver):
         assert np.all(np.abs(per_axis[:, :2]) <= v_max + tol)
         assert (np.abs(per_axis[:, 0]) + np.abs(per_axis[:, 1])).max() > v_max + 0.01
         assert np.all(np.abs(l1[:, 0]) + np.abs(l1[:, 1]) <= v_max + tol)
+
+
+def test_a_separate_lateral_cap_keeps_the_plunge_from_strafing(p):
+    """Keep the straight-in plunge from strafing: per-axis rows, |v_b| <= v_lat_max."""
+    pytest.importorskip('daqp')
+    from dock_control.mpc import Mpc
+    mpc = Mpc(p)
+    res = mpc.step(np.array([-0.08, 0.02, 0.0, 0.0, 0.0]), 0.0, np.zeros(3), (0.0, 0.0, 0.0),
+                   0.09, p['lim']['r_max'], None, False, 0.02)
+    U = np.cumsum(res.dU.reshape(mpc.Nc, 3), axis=0)
+    assert not res.fallback
+    assert np.all(np.abs(U[:, 1]) <= 0.02 + 1e-3) and np.all(np.abs(U[:, 0]) <= 0.09 + 1e-3)
+    assert np.abs(U[:, 1]).max() == pytest.approx(0.02, abs=1e-3)       # wants more, gets 0.02
