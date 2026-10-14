@@ -468,9 +468,12 @@ def config_at(sha: str) -> dict:
 def cap_type(sha: str) -> str:
     """
     The speed cap's shape at sha: 'L1' (|u_b| + |v_b| <= v_max, the brief's), 'per-axis' (|u_b|, |v_b| <= v_max
-    each; 3c397a6), or 'per-axis in APPROACH, L1 in FINAL and HOLD' (the supervisor picks per stage; ef5e42e).
+    each; 3c397a6), 'per-axis in APPROACH, L1 in FINAL and HOLD' (the supervisor picks per stage; ef5e42e), or,
+    from 903e6be, per axis in FINAL too with the lateral capped at lim.v_lat_final (FINAL's straight-in caps).
     """
     sup = git(CONTROLLER, 'show', f'{sha}:dock_control/dock_control/supervisor.py')
+    if 'v_lat_final' in sup:
+        return 'per-axis in APPROACH and FINAL (lateral at v_lat_final in FINAL), L1 in HOLD'
     if 'l1_cap' in sup:
         return 'per-axis in APPROACH, L1 in FINAL and HOLD'
     text = git(CONTROLLER, 'show', f'{sha}:dock_control/dock_control/mpc.py')
