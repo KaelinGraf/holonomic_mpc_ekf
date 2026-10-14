@@ -86,6 +86,27 @@
 #     2026-10-14 with their drives, six made-up): 16 of 16 dock; |y| 15 cm out 4 mm (from 33);
 #     sideways speed at x = -0.06 m 11 mm/s (from 25). Constant 1.0 does as well near the dock
 #     but strafes first far out.
+#   - Align, then plunge (2026-10-14, after bags dock_20261013_235737 and _235808: the
+#     robot lost the board while arcing in, and reached the coupler strafing, 7 deg off):
+#     - APPROACH's heading looks at the board (look_at_m: the bearing from the camera to the
+#       board centre beyond 0.30 m to go, blending to theta = 0 by 0.06 m), so the camera keeps
+#       it centred while the robot arcs in.
+#     - Its speed cap falls to v_align 0.04 from 0.30 to 0.08 m to go (slow_m), and its heading
+#       weight to qw_near's 10: settling at full speed, the plan hunted +-30 mm sideways
+#       (simulated; the drive answers late and short).
+#     - The standoff, now 0.08 m out, hands over only once |y| < 10 mm, |theta| < 2 deg, within
+#       15 mm of it, under 0.03 m/s and 4 deg/s, for 0.2 s.
+#     - FINAL drives straight in, |v_b| capped at v_lat_final 0.02 (per axis, not L1): strafing
+#       right at 0.09 m/s yawed the robot +6 deg into the coupler on 2026-10-14.
+#     - Simulated on 19 starts (all real ones with their drives, six made-up): 18 dock, median
+#       11.0 s; FINAL entry |y| 1.8 mm, |theta| 0.5 deg; FINAL |v_b| <= 0.02, |theta| <= 2.8 deg.
+#       The previous tuning docks 19 (7.2 s) but strafes at 0.09 m/s into the coupler, which the
+#       simulator, without the drive's strafe-to-yaw coupling, cannot fault.
+# - fid.sigma_th_floor_deg 1.0 (2026-10-14): each fix's heading variance is at least (1 deg)^2.
+#   The pipeline claimed 0.03-0.18 deg; against the EKF the fixes scattered 0.66 deg RMS over a
+#   run and 0.4-2.7 deg at the coupler, so the gate's NIS was dominated by heading: fixes whose
+#   position agreed within 1 sd were rejected, re-anchors followed, and at the coupler the
+#   position variance passed the abort limit (bag dock_20261013_234613).
 # - imu.sigma_a and imu.sigma_r_deg were measured on the robot (2026-10-13: the
 #   standard deviation of 60 s at rest, at 150 Hz) and replace the bench values
 #   0.02 m/s^2 and 0.15 deg/s.
@@ -106,12 +127,14 @@
 # covariance, and ekf_node carries that through the chain into R.
 dock:
   imu:  {rate: 150, sigma_a: 0.022, sigma_r_deg: 0.026, q_scale: 4}
-  fid:  {rate: 15, delay_nominal: 0.05, sigma_p0: 0.004, sigma_th_deg: 0.5, d0: 1.0, gate: 100}
+  fid:  {rate: 15, delay_nominal: 0.05, sigma_p0: 0.004, sigma_th_deg: 0.5, d0: 1.0, gate: 100,
+         sigma_th_floor_deg: 1.0}
   ekf:  {q_v: 4.5e-6, q_th: 3.8e-9, p_floor: 1.0e-8, sigma_v0: 0.1, buffer_s: 0.5, step_s: 0.005, zupt_settle_s: 0.3, zupt_sigma_v: 0.005,
          zupt_q_p: 0.05, zupt_q_th_deg: 10.0}
   geom: {Rw: 0.0275, lx: 0.0765, ly: 0.089, Lk: 0.201, cam_xyz: [0.070, 0.0, 0.08], marker_m: [0.2672, 0.0078], marker_psi0_deg: 180.92,
          board_squares: [5, 5], board_square_m: 0.0405}
-  lim:  {v_approach: 0.18, v_final: 0.09, a_max: 0.5, r_max: 0.30, alpha_max: 1.0, w_max: 9.0}
-  mpc:  {Ts: 0.05, Np: 80, Nc: 10, rw: [16, 16, 64], qw: [1, 0.25, 2], qw_near: [1, 1, 2], qw_final: [1, 1, 10], contact_band: 0.010, th_max_deg: 180, Qy: [6944, 62500, 1459], Ru: [1600, 1600, 400], rho_s: 5.8e+6}
-  sup:  {qw_ramp_m: [0.80, 0.25], standoff: 0.04, align_tol_m: 0.03, align_tol_deg: 5.0, standoff_tol: 0.02, dock_tol: 0.005, dock_vtol: 0.02, hold_after_s: 0.5, abort_after_s: 2.0}
+  lim:  {v_approach: 0.18, v_align: 0.04, v_final: 0.09, v_lat_final: 0.02, a_max: 0.5, r_max: 0.30, alpha_max: 1.0, w_max: 9.0}
+  mpc:  {Ts: 0.05, Np: 80, Nc: 10, rw: [16, 16, 64], qw: [1, 0.25, 2], qw_near: [1, 1, 10], qw_final: [1, 1, 10], contact_band: 0.010, th_max_deg: 180, Qy: [6944, 62500, 1459], Ru: [1600, 1600, 400], rho_s: 5.8e+6}
+  sup:  {qw_ramp_m: [0.80, 0.25], look_at_m: [0.30, 0.06], slow_m: [0.30, 0.08], align_vtol: 0.03, align_rtol_deg: 4.0,
+         align_dwell_s: 0.2, standoff: 0.08, align_tol_m: 0.010, align_tol_deg: 2.0, standoff_tol: 0.015, dock_tol: 0.005, dock_vtol: 0.02, hold_after_s: 0.5, abort_after_s: 2.0}
   tol:  {y: 0.012, th_deg: 20, tgt_y: 0.004, tgt_th_deg: 1.5}

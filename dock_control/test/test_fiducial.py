@@ -64,6 +64,7 @@ def test_measurement_jacobian_matches_finite_differences(p, pose, tilt):
 
 def test_pose_covariance_reaches_z_through_the_chain(p):
     """Square on, the camera's depth noise becomes z's x noise and its sideways noise z's y."""
+    p['fid'].pop('sigma_th_floor_deg', None)
     chain = FiducialChain(p)
     T_OM = _board_in_camera(chain, (-0.5, 0.0, 0.0))
     depth = np.diag([0.0, 0.0, 1e-4, 0.0, 0.0, 0.0])
@@ -144,3 +145,15 @@ def test_a_target_offset_sideways_moves_the_robot_the_other_way(p):
     docked = p['geom']['marker_m'][0] - p['geom']['cam_xyz'][0]
     assert np.allclose(chain.chain(*_seen(chain, docked, 0.0))[:3], (0.0, 0.010, 0.0),
                        atol=1e-12)
+
+
+def test_a_fix_is_never_surer_of_its_heading_than_the_floor(p):
+    """The pipeline's heading variance is raised to sigma_th_floor_deg^2, a larger one is kept."""
+    p['geom']['marker_psi0_deg'] = 180.0
+    chain = FiducialChain(p)
+    T_OM = _board_in_camera(chain, (-0.5, 0.0, 0.0))
+    floor = math.radians(p['fid']['sigma_th_floor_deg']) ** 2
+    tiny = np.diag([1e-8, 1e-8, 1e-8, 1e-9, 1e-9, 1e-9])
+    assert chain.measure(T_OM[:3, :3], T_OM[:3, 3], tiny)[1][2, 2] == pytest.approx(floor)
+    wide = np.diag([1e-8, 1e-8, 1e-8, 1e-2, 1e-2, 1e-2])
+    assert chain.measure(T_OM[:3, :3], T_OM[:3, 3], wide)[1][2, 2] > floor

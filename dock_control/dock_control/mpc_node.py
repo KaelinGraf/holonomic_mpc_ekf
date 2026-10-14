@@ -89,6 +89,7 @@ class MpcNode(Node):
             inp.x, inp.p_diag, inp.fix_age = est.x, est.p_diag, est.fix_age
             inp.est_age = inp.now - seconds(est.header.stamp)
             inp.imu_rate = est.imu_rate
+            inp.r_gyro = est.r_gyro
         out = self.sup.step(inp)
         self.publish_stage(out)
 
@@ -103,7 +104,7 @@ class MpcNode(Node):
 
         t0 = time.perf_counter()
         res = self.mpc.step(est.x, est.r_gyro, self.u_prev, out.y_ref, out.v_max, out.r_max,
-                            out.qw, out.l1_cap)
+                            out.qw, out.l1_cap, out.v_lat_max)
         solve_ms = (time.perf_counter() - t0) * 1e3
         late = solve_ms > SOLVE_BUDGET_MS
         inp.mpc_misses = inp.mpc_misses + 1 if res.fallback or late else 0

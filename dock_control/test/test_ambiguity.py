@@ -172,6 +172,7 @@ def _result_at(node, x, y, theta_deg, t):
 
 def test_the_filter_re_anchors_after_rejected_fixes_that_agree(node):
     """A 15 mm, 3 deg jump (a bump at the dock): five gated fixes that agree restart the filter."""
+    node.chain.var_th_floor = 0.0
     node.active = node.zeroed = True
     node.on_pose(_result_at(node, -0.6, 0.0, 0.0, 100.0))
     assert node.ekf.initialised and abs(node.ekf.x[1]) < 1e-6
@@ -181,6 +182,18 @@ def test_the_filter_re_anchors_after_rejected_fixes_that_agree(node):
     node.on_pose(_result_at(node, -0.6, 0.015, 3.0, 100.0 + ekf_node.REANCHOR_AFTER / 15.0))
     assert node.reanchors == 1
     assert np.allclose(node.ekf.x[:3], (-0.6, 0.015, math.radians(3.0)), atol=1e-4)
+
+
+def test_with_the_heading_floor_a_bump_at_the_dock_is_fused_not_re_anchored(node):
+    """
+    The same 15 mm, 3 deg jump passes the gate once a fix's heading noise is at least 1 deg.
+
+    Before the floor the fixes claimed about 0.2 deg, and 3 deg alone failed the gate.
+    """
+    node.active = node.zeroed = True
+    node.on_pose(_result_at(node, -0.6, 0.0, 0.0, 100.0))
+    node.on_pose(_result_at(node, -0.6, 0.015, 3.0, 100.0 + 1 / 15.0))
+    assert node.last_accepted and node.reanchors == 0 and node.ekf.x[1] > 0.005
 
 
 def test_scattered_rejected_fixes_do_not_re_anchor(node):

@@ -67,6 +67,7 @@ class Inputs:
     pitch: float = 0.0
     u_last: object = None
     mpc_misses: int = 0
+    r_gyro: float = 0.0
 
 
 @dataclass
@@ -80,6 +81,7 @@ class Output:
     command_enabled: bool = False
     qw: tuple = (1.0, 1.0, 1.0)
     l1_cap: bool = False
+    v_lat_max: object = None
 
 
 class Supervisor:
@@ -108,6 +110,18 @@ class Supervisor:
         self.qw_near = _triple(mpc.get('qw_near', mpc.get('qw', 1.0)))
         ramp = sup.get('qw_ramp_m')
         self.qw_ramp = (float(ramp[0]), float(ramp[1])) if ramp else None
+        look = sup.get('look_at_m')
+        self.look_at_m = (float(look[0]), float(look[1])) if look else None
+        g = p['geom']
+        self.marker_xy = (float(g['marker_m'][0]), float(g['marker_m'][1]))
+        self.cam_xy = (float(g['cam_xyz'][0]), float(g['cam_xyz'][1]))
+        self.align_vtol_sq = float(sup.get('align_vtol', math.inf)) ** 2
+        self.align_rtol = math.radians(float(sup.get('align_rtol_deg', math.inf)))
+        self.align_dwell = float(sup.get('align_dwell_s', 0.0))
+        self.v_lat_final = lim.get('v_lat_final')
+        slow = sup.get('slow_m')
+        self.slow_m = (float(slow[0]), float(slow[1])) if slow else None
+        self.v_align = float(lim.get('v_align', lim['v_approach']))
         self.du_t = mpc['Ts'] * lim['a_max']
         self.p_abort = 0.05 ** 2
 
@@ -115,6 +129,7 @@ class Supervisor:
         self.entered_at = 0.0
         self.resume = Stage.APPROACH
         self.hold_ref = self.dock_ref
+        self.aligned_since = None
 
     def step(self, inp):
         """Advance the stage machine one tick and return the Output to publish."""
@@ -131,7 +146,7 @@ class Supervisor:
                 inp.fix_age > self.hold_after_s or inp.mpc_misses >= 2):
             nxt = Stage.HOLD
         elif stage == Stage.APPROACH:
-            nxt = Stage.FINAL if self._aligned(inp.x) else stage
+            nxt = Stage.FINAL if self._settled_aligned(inp) else stage
         elif stage == Stage.FINAL:
             nxt = Stage.DOCKED if self._docked(inp.x) else stage
         elif stage == Stage.HOLD:
@@ -171,6 +186,17 @@ class Supervisor:
         return (abs(x[1]) < self.align_tol_y and abs(x[2]) < self.align_tol_th
                 and abs(x[0] - self.standoff_ref[0]) < self.standoff_tol)
 
+    def _settled_aligned(self, inp):
+        """Return whether the robot has stood aligned at the standoff for align_dwell_s."""
+        x = inp.x
+        if not (self._aligned(x) and x[3] * x[3] + x[4] * x[4] < self.align_vtol_sq
+                and abs(inp.r_gyro) < self.align_rtol):
+            self.aligned_since = None
+            return False
+        if self.aligned_since is None:
+            self.aligned_since = inp.now
+        return inp.now - self.aligned_since >= self.align_dwell
+
     def _docked(self, x):
         """Return whether docked: x >= -3 mm, speed < 20 mm/s, |y| <= 4 mm, |theta| <= 1.5 deg."""
         return (x[0] >= -self.dock_tol and x[3] * x[3] + x[4] * x[4] < self.dock_vtol_sq
@@ -193,11 +219,47 @@ class Supervisor:
         s = s * s * (3.0 - 2.0 * s)
         return tuple(a + s * (b - a) for a, b in zip(self.qw_approach, self.qw_near))
 
+    def look_at(self, x):
+        """Return APPROACH's heading reference at estimate x (look_at_m: bearing to theta = 0)."""
+        if self.look_at_m is None or x is None:
+            return 0.0
+        free, lock = self.look_at_m
+        to_go = max(0.0, self.standoff_ref[0] - float(x[0]))
+        w = min(1.0, max(0.0, (to_go - lock) / (free - lock)))
+        w = w * w * (3.0 - 2.0 * w)
+        c, s = math.cos(x[2]), math.sin(x[2])
+        cam_x = x[0] + c * self.cam_xy[0] - s * self.cam_xy[1]
+        cam_y = x[1] + s * self.cam_xy[0] + c * self.cam_xy[1]
+        return w * math.atan2(self.marker_xy[1] - cam_y, self.marker_xy[0] - cam_x)
+
+    def _straight_in_caps(self, u_last):
+        """Return FINAL's (v_max, v_lat_max): each axis falling by du_max a tick to its own cap."""
+        ub, vb = (0.0, 0.0) if u_last is None else (abs(u_last[0]), abs(u_last[1]))
+        return (max(self.v_final, min(self.v_approach, ub - self.du_t)),
+                max(self.v_lat_final, vb - self.du_t))
+
+    def approach_cap(self, x, u_last):
+        """Return APPROACH's per-axis speed cap at estimate x, falling no faster than du_max."""
+        if self.slow_m is None or x is None:
+            return self.v_approach
+        start, end = self.slow_m
+        to_go = max(0.0, self.standoff_ref[0] - float(x[0]))
+        s = min(1.0, max(0.0, (start - to_go) / (start - end)))
+        s = s * s * (3.0 - 2.0 * s)
+        cap = self.v_approach + s * (self.v_align - self.v_approach)
+        fastest = 0.0 if u_last is None else max(abs(u_last[0]), abs(u_last[1]))
+        return min(self.v_approach, max(cap, fastest - self.du_t))
+
     def _output(self, stage, u_last, x=None):
         if stage == Stage.APPROACH:
-            return Output(stage, self.standoff_ref, self.v_approach, self.r_max, True,
+            ref = (self.standoff_ref[0], self.standoff_ref[1], self.look_at(x))
+            return Output(stage, ref, self.approach_cap(x, u_last), self.r_max, True,
                           self.approach_qw(x))
         if stage == Stage.FINAL:
+            if self.v_lat_final is not None:
+                v_max, v_lat = self._straight_in_caps(u_last)
+                return Output(stage, self.dock_ref, v_max, self.r_max, True, self.qw_final,
+                              v_lat_max=v_lat)
             return Output(stage, self.dock_ref, self._ramped_cap(u_last), self.r_max, True,
                           self.qw_final, l1_cap=True)
         if stage == Stage.HOLD:

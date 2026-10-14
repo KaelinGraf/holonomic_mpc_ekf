@@ -70,6 +70,8 @@ class FiducialChain:
         self.sigma_p0 = fid['sigma_p0']
         self.inv_d0_sq = 1.0 / fid['d0'] ** 2
         self.sigma_th = math.radians(fid['sigma_th_deg'])
+        floor = fid.get('sigma_th_floor_deg')
+        self.var_th_floor = math.radians(floor) ** 2 if floor else 0.0
 
     def chain(self, R_OM, t_OM):
         """Return (x, y, theta, roll, pitch) of base_link in the target frame."""
@@ -107,7 +109,9 @@ class FiducialChain:
     def measure(self, R_OM, t_OM, pose_cov):
         """Return (z, R, roll, pitch) from one board pose and its live 6x6 covariance."""
         z, roll, pitch, J = self.linearise(R_OM, t_OM)
-        return z, J @ pose_cov @ J.T, roll, pitch
+        R = J @ pose_cov @ J.T
+        R[2, 2] = max(R[2, 2], self.var_th_floor)
+        return z, R, roll, pitch
 
     def sigma_p(self, d):
         """Return the simulated position standard deviation at range d (report Section 2.2)."""

@@ -38,7 +38,10 @@ def test_disarmed_means_idle_with_the_command_disabled(p):
 
 
 def test_nominal_run_through_the_table(p):
-    """IDLE, ACQUIRE, APPROACH, FINAL, DOCKED, and back to IDLE on disarm."""
+    """IDLE, ACQUIRE, APPROACH, FINAL, DOCKED, and back to IDLE on disarm (the two-stage table)."""
+    for key in ('look_at_m', 'slow_m', 'align_vtol', 'align_rtol_deg', 'align_dwell_s'):
+        p['sup'].pop(key, None)
+    p['lim'].pop('v_lat_final', None)
     sup = Supervisor(p)
     assert sup.step(_inputs(x=None)).stage == Stage.ACQUIRE
     assert sup.step(_inputs(x=None)).stage == Stage.ACQUIRE
@@ -145,3 +148,53 @@ def test_approach_weights_ramp_from_far_to_near_with_the_distance_to_go(p):
     q['sup'].pop('qw_ramp_m')
     plain = Supervisor(q)
     assert plain.approach_qw(np.array([-s0 - 0.3, 0.0, 0.0, 0.0, 0.0])) == plain.qw_approach
+
+
+def _g(p):
+    """Return a copy of p with the align-then-plunge settings of 2026-10-14."""
+    q = copy.deepcopy(p)
+    q['sup'].update(standoff=0.08, align_tol_m=0.010, align_tol_deg=2.0, standoff_tol=0.015,
+                    align_vtol=0.03, align_rtol_deg=4.0, align_dwell_s=0.2,
+                    look_at_m=[0.30, 0.06], slow_m=[0.30, 0.08])
+    q['lim'].update(v_align=0.04, v_lat_final=0.02)
+    return q
+
+
+def test_approach_looks_at_the_board_far_out_and_straight_ahead_near_the_standoff(p):
+    """Far out the heading reference is the camera's bearing to the board centre; near, zero."""
+    sup = Supervisor(_g(p))
+    mx, my = p['geom']['marker_m']
+    far = np.array([-1.0, 0.4, 0.0, 0.0, 0.0])
+    cam_x = far[0] + p['geom']['cam_xyz'][0]
+    assert sup.look_at(far) == pytest.approx(math.atan2(my - far[1], mx - cam_x))
+    assert sup.look_at(np.array([-0.10, 0.02, 0.0, 0.0, 0.0])) == 0.0
+    mid = sup.look_at(np.array([-0.08 - 0.18, 0.05, 0.0, 0.0, 0.0]))
+    full = math.atan2(my - 0.05, mx - (-0.26 + p['geom']['cam_xyz'][0]))
+    assert 0.0 < abs(mid) < abs(full)
+
+
+def test_the_standoff_hands_over_only_once_settled_and_aligned(p):
+    """Aligned but moving, or not yet for align_dwell_s, stays in APPROACH."""
+    sup = Supervisor(_g(p))
+    sup.step(_inputs(x=None))
+    at = np.array([-0.08, 0.004, math.radians(0.5), 0.0, 0.0])
+    out = sup.step(_inputs(x=at, now=1.0))
+    assert out.stage == Stage.APPROACH
+    moving = at.copy()
+    moving[4] = 0.05
+    assert sup.step(_inputs(x=moving, now=1.1)).stage == Stage.APPROACH
+    assert sup.step(_inputs(x=at, now=1.2)).stage == Stage.APPROACH
+    assert sup.step(_inputs(x=at, now=1.35)).stage == Stage.APPROACH
+    out = sup.step(_inputs(x=at, now=1.45))
+    assert out.stage == Stage.FINAL and not out.l1_cap
+    assert out.v_lat_max == pytest.approx(0.02) and out.v_max == pytest.approx(0.09)
+
+
+def test_approach_slows_near_the_standoff_no_faster_than_the_drive_can_brake(p):
+    sup = Supervisor(_g(p))
+    far = np.array([-0.08 - 0.5, 0.0, 0.0, 0.0, 0.0])
+    near = np.array([-0.08 - 0.05, 0.0, 0.0, 0.0, 0.0])
+    assert sup.approach_cap(far, np.zeros(3)) == pytest.approx(0.18)
+    assert sup.approach_cap(near, np.zeros(3)) == pytest.approx(0.04)
+    du = p['mpc']['Ts'] * p['lim']['a_max']
+    assert sup.approach_cap(near, np.array([0.18, 0.0, 0.0])) == pytest.approx(0.18 - du)
