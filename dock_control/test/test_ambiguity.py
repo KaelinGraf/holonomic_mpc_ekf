@@ -233,3 +233,21 @@ def test_while_acquiring_a_pose_is_fused_without_the_gate(node):
     y = node.ekf.x[1]
     node.on_pose(_result_at(node, -0.6, y - 0.06, -6.0, 100.0 + 2 / 15.0))
     assert not node.last_accepted and abs(node.ekf.x[1] - y) < 0.002
+
+
+def test_in_acquire_a_solution_that_passes_the_gate_keeps_its_own_covariance(node):
+    """
+    In ACQUIRE an ambiguous pose's nearer solution is fused narrow when it passes the gate.
+
+    The user, 2026-10-14: "it should not abort with ambiguous frames as long as one of the
+    frames passes the innovation gate". Fused wide every time, the estimate stayed too unsure
+    to move, and the covariance check aborted the run.
+    """
+    node.active = node.zeroed = True
+    node.acquiring = True
+    node.on_pose(_ambiguous_result(node, (0.0, math.radians(8.0), 0.0)))   # starts, wide
+    wide = node.ekf.P[2, 2]
+    msg = _ambiguous_result(node, (0.0, math.radians(8.0), 0.0))
+    msg.header.stamp.nanosec = 66_666_667
+    node.on_pose(msg)
+    assert node.last_accepted and node.ekf.P[2, 2] < 0.5 * wide      # own noise, not + spread

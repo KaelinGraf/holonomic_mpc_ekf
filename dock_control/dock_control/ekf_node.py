@@ -33,9 +33,13 @@ the robot lined up head-on). The disagreement is still added where no test
 vouches for the solution: the first pose, poses fused in ACQUIRE, and the fix a
 re-anchor restarts from, so the filter starts wide where the two disagree.
 
-While docking is in ACQUIRE, poses are fused without the NIS gate (the user's
-decision, 2026-10-13): the filter has only just started from what may be the
-wrong one of two solutions, and must be free to move to the right one.
+While docking is in ACQUIRE, a pose that fails the NIS gate is still fused, without
+the gate and with the solutions' disagreement in its noise (the user's decision,
+2026-10-13): the filter has only just started from what may be the wrong one of
+two solutions, and must be free to move to the right one. One that passes is fused
+as anywhere else, with its own covariance (2026-10-14: fused wide every time, an
+ambiguous start 2.2 m out kept the lateral sd at 70 mm, and the supervisor's
+covariance check aborted the run as it began to move).
 
 If REANCHOR_AFTER fixes in a row fail the gate yet agree with each other, it is
 the filter that has gone wrong (a bump at the dock, a drift through a run of
@@ -286,11 +290,13 @@ class EkfNode(Node):
             self.ekf.initialise(z, R_untested, t_capture)
             self.last_accept, self.last_accepted = t_capture, True
             return
-        if self.acquiring:
+        self.last_accepted, self.last_nis = self.ekf.update(z, R, t_capture, gate=True)
+        if self.acquiring and not self.last_accepted:
+            # ACQUIRE: a solution that passes the gate was fused above with its own covariance;
+            # if neither does, fuse anyway, without the gate and wide, so that a filter started
+            # from the wrong one of two solutions can move to the right one
             self.last_accepted, self.last_nis = self.ekf.update(z, R_untested, t_capture,
                                                                 gate=False)
-        else:
-            self.last_accepted, self.last_nis = self.ekf.update(z, R, t_capture, gate=True)
         if self.last_accepted:
             self.last_accept = t_capture
             self.rejected.clear()
