@@ -63,9 +63,10 @@ def test_the_robots_lag_and_drift_neither_rock_the_heading_nor_leave_it_beside_t
     r = _dock(p, start, seconds=60.0, tau=0.15, cmd_delay_s=0.05, drift=-0.15)
     assert r['stage'] == Stage.DOCKED
     assert r['final_theta_sd'] < math.radians(1.0)
-    # no limit cycle: r_b never swings back and forth; one heading correction may reach 0.6 r_max
-    # in the 80 mm straight-in plunge of 2026-10-14 (0.158 rad/s against 0.15 before)
-    assert r['final_r_reversals'] == 0 and r['final_r_max'] < 0.6 * p['lim']['r_max']
+    # no limit cycle: r_b never swings back and forth. Since 2026-10-14 FINAL may begin up to
+    # align_tol_deg (2 deg) off, moving, and the heading lock takes that out in one quick turn
+    # (up to 0.26 rad/s here), so the peak alone no longer marks rocking
+    assert r['final_r_reversals'] == 0 and r['final_r_max'] <= p['lim']['r_max'] + 1e-9
     assert abs(r['y_in']) < 0.015      # FINAL at 0.09 m/s leaves less time to fix the drift
 
 
