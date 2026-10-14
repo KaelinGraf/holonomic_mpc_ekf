@@ -197,7 +197,7 @@ class Supervisor:
         return inp.now - self.aligned_since >= self.align_dwell
 
     def _docked(self, x):
-        """Return whether docked: x >= -sup.dock_tol, speed < dock_vtol, |y| and |theta| in tol.tgt_*."""
+        """Return whether docked: x >= -dock_tol, speed < dock_vtol, |y|, |theta| in tol.tgt_*."""
         return (x[0] >= -self.dock_tol and x[3] * x[3] + x[4] * x[4] < self.dock_vtol_sq
                 and abs(x[1]) <= self.tgt_y and abs(x[2]) <= self.tgt_th)
 
