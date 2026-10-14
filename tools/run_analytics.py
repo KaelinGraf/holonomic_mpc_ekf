@@ -899,7 +899,7 @@ def analyse_fixes(b: Bag, tl: Timeline) -> dict:
                  latency_max_ms=fin(lat.max() * 1e3, 1))
         if len(b.image) > 1:
             m['image_rate_hz'] = fin((len(b.image) - 1) / (b.image[-1] - b.image[0]), 2)
-        edges = np.arange(0.1, 1.6, 0.1)
+        edges = np.arange(0.1, 2.05, 0.1)
         rows = []
         for lo, hi in zip(edges[:-1], edges[1:]):
             k = valid & (rng >= lo) & (rng < hi)
@@ -2559,37 +2559,46 @@ def aggregate_figures(runs: list, out_root: Path) -> list:
     # ambiguity by range, pooled per detector
     pool = {}
     for r in runs:
-        det = r['detector']['name']
+        det = f"{r['detector']['name']}, {r['board_square_m'] * 1000:.1f} mm board"
         for b in r['fixes'].get('by_range', []):
             key = (b['range_lo'], b['range_hi'])
             n, a = pool.setdefault(det, {}).get(key, (0, 0.0))
             pool[det][key] = (n + b['poses'], a + b['poses'] * (b['ambiguous_share'] or 0))
     if pool:
         fig, ax = plt.subplots(figsize=(6.4, 3.6))
-        for k, (det, d) in enumerate(sorted(pool.items(), key=lambda kv: list(DET_COLOUR).index(kv[0])
-                                            if kv[0] in DET_COLOUR else 9)[:3]):
+        def colour_key(kv):
+            name = kv[0].split(',')[0]
+            return list(DET_COLOUR).index(name) if name in DET_COLOUR else 9
+        for k, (det, d) in enumerate(sorted(pool.items(), key=colour_key)[:3]):
             ks = sorted(d)
             x = [(lo + hi) / 2 for lo, hi in ks]
-            ax.plot(x, [100 * d[q][1] / max(d[q][0], 1) for q in ks], '-o', ms=5, color=DET_COLOUR.get(det, C[k]),
-                    label=f'{det}')
+            ax.plot(x, [100 * d[q][1] / max(d[q][0], 1) for q in ks], '-o', ms=5,
+                    color=DET_COLOUR.get(det.split(',')[0], C[k]), label=f'{det}')
             for xi, q in zip(x, ks):
                 if d[q][0] >= 1:
                     ax.text(xi, 100 * d[q][1] / max(d[q][0], 1), f' {d[q][0]}', fontsize=5.5, color=INK2, va='bottom')
         ax.set_xlabel('range (m)')
         ax.set_ylabel('ambiguous poses (%), all runs pooled')
-        ax.legend(title='detector deployed', title_fontsize=7)
+        ax.legend(title='detector deployed, board', title_fontsize=7)
         fig.tight_layout()
         save(fig, out_root, 'fix_ambiguity_by_range')
-        figs.append(Fig('fix_ambiguity_by_range', 'Ambiguous poses by range, all runs pooled per deployed detector',
+        big = {k: v for k, v in pool.items() if '40.5 mm' in k}
+        big_n = sum(n for d in big.values() for q, (n, a) in d.items() if q[0] >= 0.5)
+        big_a = sum(a for d in big.values() for q, (n, a) in d.items() if q[0] >= 0.5)
+        figs.append(Fig('fix_ambiguity_by_range', 'Ambiguous poses by range, all runs pooled per detector and board',
                         'The share of solved poses that were ambiguous (IPPE\'s two solutions within 1.5x in reprojection '
-                        'error) per 0.1 m of range, pooling every run by the detector deployed at the time; the count of '
-                        'poses is beside each point.',
+                        'error) per 0.1 m of range, pooling every run by the detector deployed and the board in use; the '
+                        'count of poses is beside each point.',
                         'inference_result of every bag (docking, bring-up and drive-calibration runs).',
                         'With the 24 mm board, ambiguity climbs from a few per cent inside 0.5 m to over half beyond 0.7 m, '
-                        'whichever detector ran: a geometric limit (7c item 57).',
-                        'The detectors ran in different sessions, at different angles and light, so a gap between the curves '
-                        'here is not a detector effect; the comparison on the same frames (Detectors, below) is the fair '
-                        'test. Range is the pipeline\'s own estimate.', 'aggregate'))
+                        'whichever detector ran: a geometric limit (7c item 57).'
+                        + (f' With the 40.5 mm board (2026-10-14), {big_a:.0f} of {big_n} poses beyond 0.5 m were ambiguous: '
+                           'ambiguity scales with the square size over the range, so the bigger board moves the limit out.'
+                           if big_n else ''),
+                        'The detectors ran in different sessions, at different angles and light, and the board changed with '
+                        'the detector on 2026-10-14, so a gap between the curves is not a detector effect; the comparison on '
+                        'the same frames (Detectors, below) is the fair test. Few poses per bin beyond 0.5 m for the 40.5 mm '
+                        'board so far. Range is the pipeline\'s own estimate.', 'aggregate'))
     # MPC solve times
     rows = [(run_label(r), r['mpc']['solve_ms']) for r in docks if (r.get('mpc') or {}).get('solve_ms')]
     if rows:
@@ -2724,9 +2733,13 @@ Or by hand in p4p-gpu, both workspaces sourced:
 
     cd /workspace/controller_ws && python3 tools/run_analytics.py /workspace/run_data/pi_bags
 
-A run already recorded is skipped unless `--force`; the index is rebuilt every time. `--no-sim` skips the
-simulation, `--detectors` and `--finetune` run the GPU comparisons (one model per process; not while the
-camera calibration or a fine-tune holds the GPU), `--index-only` only rebuilds the index.
+A run already recorded from the same bag (same files and sizes) by the same version of the tool is skipped
+unless `--force`; the index is rebuilt every time. The tool runs at nice 19 with one numerics thread, so it can
+run while the laptop serves a docking session. `--no-sim` skips the simulations, `--index-only` only rebuilds the
+index, `--finetune` regathers the fine-tuning records (CPU). `--detectors` runs the detector comparison: the GPU
+only for detectors with no cached results (`--rerun-detectors` to redo them; the frame and result cache is in the
+container's /tmp/run_analytics_frames), one model per process, called from one thread. Never run it while a
+camera calibration, a fine-tune or a docking session's inference holds the GPU.
 
 ## What a record holds
 
