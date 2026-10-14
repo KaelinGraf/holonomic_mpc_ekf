@@ -1381,6 +1381,10 @@ def simulate_run(b: Bag, tl: Timeline, cfg: dict, drive: dict, fixes: dict, stag
     return res
 
 
+def times(n: int) -> str:
+    return 'once' if n == 1 else f'{n} times'
+
+
 def sim_verdicts(real: dict, sim: dict, ekf: dict, mpcm: dict) -> list:
     """Plain statements of where the simulation does and does not reproduce the run."""
     out = []
@@ -1390,7 +1394,7 @@ def sim_verdicts(real: dict, sim: dict, ekf: dict, mpcm: dict) -> list:
         if a and c:
             ratio = c / a
             out.append(f'Both dock. The simulation takes {c:.1f} s from APPROACH to DOCKED against the '
-                       f"robot's {a:.1f} s ({ratio:.2f}x)" + ('' if 0.75 <= ratio <= 1.33 else
+                       f"robot's {a:.1f} s ({ratio:.2f}x)" + ('.' if 0.75 <= ratio <= 1.33 else
                                                                ': it does not reproduce the timing.'))
     elif ro == 'disarmed in FINAL' and real.get('final') and abs(real['final']['x_mm']) <= 15 \
             and abs(real['final']['y_mm']) <= 25:
@@ -1420,10 +1424,10 @@ def sim_verdicts(real: dict, sim: dict, ekf: dict, mpcm: dict) -> list:
         out.append(f"Final pose: robot ({fr['x_mm']:.0f}, {fr['y_mm']:.0f}) mm, {fr['th_deg']:.1f} deg (camera); "
                    f"simulation ({fs['x_mm']:.0f}, {fs['y_mm']:.0f}) mm, {fs['th_deg']:.1f} deg.")
     if real.get('holds', 0) and not sim.get('holds'):
-        out.append(f"The robot went to HOLD {real['holds']} times (no accepted fix for 0.5 s); the simulation never did: "
+        out.append(f"The robot went to HOLD {times(real['holds'])} (no accepted fix for 0.5 s); the simulation never did: "
                    'its fixes are never ambiguous and never fail the gate for long.')
     if ekf.get('reanchors'):
-        out.append(f"The robot's EKF re-anchored {ekf['reanchors']} times; the simulated EKF cannot, since its fixes "
+        out.append(f"The robot's EKF re-anchored {times(ekf['reanchors'])}; the simulated EKF cannot, since its fixes "
                    'are unbiased and unambiguous.')
     if (sim.get('model') or {}).get('miswired'):
         out.append('In this run the drive\'s channels still drove the wrong wheels (fixed between the 16:22 and 16:35 NZDT '
@@ -2802,6 +2806,8 @@ def main() -> None:
     ap.add_argument('--no-sim', action='store_true', help='skip the closed-loop simulation of each run')
     ap.add_argument('--only', default='', help='only bags whose name contains this')
     ap.add_argument('--index-only', action='store_true', help='only rebuild INDEX.md and the aggregate')
+    ap.add_argument('--readme-only', action='store_true',
+                    help="re-render each run's README.md from its metrics.json (no bags read), then the index")
     ap.add_argument('--detectors', action='store_true', help='also compare the detectors on the bags\' frames (GPU)')
     ap.add_argument('--finetune', action='store_true', help='also gather the fine-tuning records (CPU)')
     ap.add_argument('--rerun-detectors', action='store_true',
@@ -2816,7 +2822,15 @@ def main() -> None:
         if a.finetune:
             rad.finetune(a.out / 'finetune')
     live = json.loads(live_path.read_text()) if live_path.exists() else None
-    if not a.index_only:
+    if a.readme_only:
+        for p in sorted(a.out.glob('*/metrics.json')):
+            M = json.loads(p.read_text())
+            if M.get('sim'):
+                M['sim']['verdicts'] = sim_verdicts(M['run_metrics'], M['sim'], M['ekf'], M.get('mpc') or {})
+            p.write_text(json.dumps(M, indent=1))
+            (p.parent / 'README.md').write_text(run_readme(M, [Fig(**f) for f in M.get('figures', [])]))
+        print(f'README.md re-rendered for {len(list(a.out.glob("*/metrics.json")))} runs')
+    elif not a.index_only:
         target = a.target or DEFAULT_BAGS
         bags = [p for p in find_bags(target) if a.only in p.name]
         print(f'{len(bags)} bags in {target}')
