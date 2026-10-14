@@ -181,11 +181,7 @@ class Supervisor:
                 and inp.p_diag[0] < self.p_start and inp.p_diag[1] < self.p_start)
 
     def _aligned(self, x):
-        """
-        Return whether the robot is aligned at the standoff.
-
-        |y| < 10 mm, |theta| < 1 deg and |x + 0.30| < 50 mm (brief Section 7).
-        """
+        """Return whether the robot is aligned at the standoff."""
         return (abs(x[1]) < self.align_tol_y and abs(x[2]) < self.align_tol_th
                 and abs(x[0] - self.standoff_ref[0]) < self.standoff_tol)
 
@@ -201,7 +197,7 @@ class Supervisor:
         return inp.now - self.aligned_since >= self.align_dwell
 
     def _docked(self, x):
-        """Return whether docked: x >= -3 mm, speed < 20 mm/s, |y| <= 4 mm, |theta| <= 1.5 deg."""
+        """Return whether docked: x >= -sup.dock_tol, speed < dock_vtol, |y| and |theta| in tol.tgt_*."""
         return (x[0] >= -self.dock_tol and x[3] * x[3] + x[4] * x[4] < self.dock_vtol_sq
                 and abs(x[1]) <= self.tgt_y and abs(x[2]) <= self.tgt_th)
 
