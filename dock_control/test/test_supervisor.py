@@ -198,3 +198,15 @@ def test_approach_slows_near_the_standoff_no_faster_than_the_drive_can_brake(p):
     assert sup.approach_cap(near, np.zeros(3)) == pytest.approx(0.04)
     du = p['mpc']['Ts'] * p['lim']['a_max']
     assert sup.approach_cap(near, np.array([0.18, 0.0, 0.0])) == pytest.approx(0.18 - du)
+
+
+def test_acquire_waits_until_the_estimate_is_sure_enough_to_move(p):
+    """With sup.start_sigma_m, ACQUIRE holds while the position sd is over it."""
+    q = copy.deepcopy(p)
+    q['sup']['start_sigma_m'] = 0.03
+    sup = Supervisor(q)
+    sup.step(_inputs(x=None))
+    out = sup.step(_inputs(p_diag=np.array([0.0002, 0.005, 1e-4, 1e-3, 1e-3])))
+    assert out.stage == Stage.ACQUIRE and not out.command_enabled
+    out = sup.step(_inputs(p_diag=np.full(5, 1e-6)))
+    assert out.stage == Stage.APPROACH

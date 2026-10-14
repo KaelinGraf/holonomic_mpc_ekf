@@ -124,6 +124,8 @@ class Supervisor:
         self.v_align = float(lim.get('v_align', lim['v_approach']))
         self.du_t = mpc['Ts'] * lim['a_max']
         self.p_abort = 0.05 ** 2
+        start = sup.get('start_sigma_m')
+        self.p_start = float(start) ** 2 if start else math.inf
 
         self.out = Output()
         self.entered_at = 0.0
@@ -173,9 +175,10 @@ class Supervisor:
                 or inp.p_diag[0] > self.p_abort or inp.p_diag[1] > self.p_abort)
 
     def _ready(self, inp):
-        """Return whether to start moving: estimate fresh, IMU >= 90 % of its rate, drive armed."""
+        """Return whether to start moving: estimate fresh and sure, IMU >= 90 %, drive armed."""
         return (inp.x is not None and inp.drive_ok and inp.est_age <= EST_TIMEOUT_S
-                and inp.imu_rate >= self.imu_rate_min)
+                and inp.imu_rate >= self.imu_rate_min
+                and inp.p_diag[0] < self.p_start and inp.p_diag[1] < self.p_start)
 
     def _aligned(self, x):
         """

@@ -111,6 +111,17 @@
 #       off, so the standoff hands over the moment the robot is aligned (10 mm, 2 deg). Simulated
 #       on 19 starts: 19 dock, median 10.2 s, no heading reversals in APPROACH (21 before at
 #       worst); v_align 0.06 or 0.08 is faster (9.1-9.3 s) but loses one or two starts.
+# - lim.w_max 12 rad/s (2026-10-14, from 9; the design had 15 before the 60 % cut): at 9 the
+#   wheel rows held most of APPROACH (35-82 % of moving ticks at 95 % or more), so driving at
+#   the 0.18 m/s cap left no wheel speed to turn with and the robot turned late (bag
+#   dock_20261014_001819: heading 9-25 deg behind the look-at reference until the slowdown).
+#   The motors had room: pulses reached 207-265 us of the firmware's 800. Simulated on 19
+#   starts: 12 turns in sooner (largest heading error in APPROACH's last 0.3 m 34 deg, from 50)
+#   and docks 19 of 19 with the board always in view; 15 turns sooner still (25 deg) but one
+#   start lost the board for 6 fixes (bearing 42 deg). The linear caps are unchanged.
+# - sup.start_sigma_m 0.03 (2026-10-14): ACQUIRE waits for a position sd under 3 cm. An ambiguous
+#   start 2.2 m out (bag dock_20261014_002123: the two solutions 15 cm apart) entered APPROACH
+#   with a 70 mm lateral sd and the covariance abort fired 0.05 s later.
 # - fid.sigma_th_floor_deg 1.0 (2026-10-14): each fix's heading variance is at least (1 deg)^2.
 #   The pipeline claimed 0.03-0.18 deg; against the EKF the fixes scattered 0.66 deg RMS over a
 #   run and 0.4-2.7 deg at the coupler, so the gate's NIS was dominated by heading: fixes whose
@@ -142,8 +153,8 @@ dock:
          zupt_q_p: 0.05, zupt_q_th_deg: 10.0}
   geom: {Rw: 0.0275, lx: 0.0765, ly: 0.089, Lk: 0.201, cam_xyz: [0.070, 0.0, 0.08], marker_m: [0.2672, 0.0078], marker_psi0_deg: 180.92,
          board_squares: [5, 5], board_square_m: 0.0405}
-  lim:  {v_approach: 0.18, v_align: 0.04, v_final: 0.09, v_lat_final: 0.02, a_max: 0.5, r_max: 0.30, alpha_max: 1.0, w_max: 9.0}
+  lim:  {v_approach: 0.18, v_align: 0.04, v_final: 0.09, v_lat_final: 0.02, a_max: 0.5, r_max: 0.30, alpha_max: 1.0, w_max: 12.0}
   mpc:  {Ts: 0.05, Np: 80, Nc: 10, rw: [16, 16, 64], qw: [1, 0.25, 2], qw_near: [1, 1, 2], qw_final: [1, 1, 10], contact_band: 0.010, th_max_deg: 180, Qy: [6944, 62500, 1459], Ru: [1600, 1600, 400], rho_s: 5.8e+6}
-  sup:  {qw_ramp_m: [0.80, 0.25], look_at_m: [0.30, 0.06], slow_m: [0.30, 0.08],
+  sup:  {start_sigma_m: 0.03, qw_ramp_m: [0.80, 0.25], look_at_m: [0.30, 0.06], slow_m: [0.30, 0.08],
          standoff: 0.08, align_tol_m: 0.010, align_tol_deg: 2.0, standoff_tol: 0.015, dock_tol: 0.005, dock_vtol: 0.02, hold_after_s: 0.5, abort_after_s: 2.0}
   tol:  {y: 0.012, th_deg: 20, tgt_y: 0.004, tgt_th_deg: 1.5}
