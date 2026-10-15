@@ -15,6 +15,13 @@
 #   the coupler, the fixes read x -26.4 mm, y +6.4 mm, theta -0.90 deg (camera-board range 0.265 m).
 #   marker_m (0.2672, 0.0078) and marker_psi0_deg 180.92 make that pose read (0, 0, 0), solved
 #   through FiducialChain on 62 live docked poses.
+#   2026-10-15, the camera, the robot's coupler and the board on its pedestal all moved: the camera
+#   lens is now 135 mm ahead of base_link, on the centre line (measured; height still
+#   0.08, a guess). Lk (unused by the code) was not re-measured. Docked twice against the coupler
+#   (camera-board range 0.211 m, 12 of the 16 inner corners in view, the pipeline flagging the
+#   covariance invalid but finite), the two dockings solved to marker_m (0.2474, 0.0013) /
+#   (0.2472, 0.0019) and marker_psi0_deg 178.94 / 178.69 through FiducialChain (225 and 151 poses,
+#   run_data/calibration_20261015); their mean is used.
 # - sup: APPROACH aims 40 mm short of the dock (standoff 0.04, from 0.30) and hands
 #   over within 20 mm of that; FINAL's heading lock is only for the last centimetres
 #   (2026-10-13). dock_tol 5 mm (from 3) for the fixes' noise at contact. Docked, the lens is then
@@ -151,7 +158,7 @@ dock:
          sigma_th_floor_deg: 1.0}
   ekf:  {q_v: 4.5e-6, q_th: 3.8e-9, p_floor: 1.0e-8, sigma_v0: 0.1, buffer_s: 0.5, step_s: 0.005, zupt_settle_s: 0.3, zupt_sigma_v: 0.005,
          zupt_q_p: 0.05, zupt_q_th_deg: 10.0}
-  geom: {Rw: 0.0275, lx: 0.0765, ly: 0.089, Lk: 0.201, cam_xyz: [0.070, 0.0, 0.08], marker_m: [0.2672, 0.0078], marker_psi0_deg: 180.92,
+  geom: {Rw: 0.0275, lx: 0.0765, ly: 0.089, Lk: 0.201, cam_xyz: [0.135, 0.0, 0.08], marker_m: [0.2473, 0.0016], marker_psi0_deg: 178.82,
          board_squares: [5, 5], board_square_m: 0.0405}
   lim:  {v_approach: 0.18, v_align: 0.04, v_final: 0.09, v_lat_final: 0.02, a_max: 0.5, r_max: 0.30, alpha_max: 1.0, w_max: 12.0}
   mpc:  {Ts: 0.05, Np: 80, Nc: 10, rw: [16, 16, 64], qw: [1, 0.25, 2], qw_near: [1, 1, 2], qw_final: [1, 1, 10], contact_band: 0.010, th_max_deg: 180, Qy: [6944, 62500, 1459], Ru: [1600, 1600, 400], rho_s: 5.8e+6}
