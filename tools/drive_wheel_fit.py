@@ -133,8 +133,12 @@ def fit(rows, gain_per_direction=False):
     return best.x, math.sqrt(float(np.mean(best.fun ** 2)))
 
 
-def imu_speeds(bag, steps):
-    """Each step's [vx, vy] from the accelerometer: the change at its start, less at its stop."""
+def imu_speeds(bag, steps, yaw_deg=0.0):
+    """
+    Each step's [vx, vy] from the accelerometer: the change at its start, less at its stop.
+
+    The IMU's x and y are turned by yaw_deg into base_link's (imu.yaw_deg, as ekf_node does).
+    """
     import rosbag2_py
     from rclpy.serialization import deserialize_message
     from rosidl_runtime_py.utilities import get_message
@@ -152,6 +156,8 @@ def imu_speeds(bag, steps):
         rows.append((m.header.stamp.sec + 1e-9 * m.header.stamp.nanosec,
                      m.linear_acceleration.x, m.linear_acceleration.y))
     acc = np.array(rows)
+    c, s = math.cos(math.radians(yaw_deg)), math.sin(math.radians(yaw_deg))
+    acc[:, 1], acc[:, 2] = c * acc[:, 1] - s * acc[:, 2], s * acc[:, 1] + c * acc[:, 2]
 
     def integrate(a, b, bias):
         s = (acc[:, 0] >= a) & (acc[:, 0] <= b)
@@ -222,6 +228,15 @@ def selftest():
     return ok
 
 
+def config_imu_yaw():
+    """dock_demo.yaml's imu.yaw_deg (0 without dock_control installed, or before it was measured)."""
+    try:
+        from dock_control import params
+        return float(params.load(params.default_path())['imu'].get('yaw_deg', 0.0))
+    except Exception:           # noqa: BLE001 - the tool must run without the workspace sourced
+        return 0.0
+
+
 def main():
     """Fit a bag, or run the self-test."""
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
@@ -231,8 +246,12 @@ def main():
     ap.add_argument('--settle', type=float, default=0.5, help='for the gyro and pose windows')
     ap.add_argument('--gain-per-direction', action='store_true',
                     help='a gain per wheel and direction, not one per wheel')
+    ap.add_argument('--imu-yaw-deg', type=float, default=None,
+                    help="the IMU's yaw against base_link; default the config's imu.yaw_deg")
     ap.add_argument('--selftest', action='store_true')
     args = ap.parse_args()
+    if args.imu_yaw_deg is None:
+        args.imu_yaw_deg = config_imu_yaw()
     if args.selftest:
         sys.exit(0 if selftest() else 1)
     if not args.bags:
@@ -243,7 +262,7 @@ def main():
         d = dcf.read_bag(Path(bag))
         steps = dcf.find_steps(d['cmd'])
         dcf.measure(steps, d, dcf.Firmware(), args.settle)
-        speeds = None if args.fixes else imu_speeds(Path(bag), steps)
+        speeds = None if args.fixes else imu_speeds(Path(bag), steps, args.imu_yaw_deg)
         for k, st in enumerate(steps):
             cmd = np.zeros(3)
             cmd['xyr'.index(st.axis)] = st.cmd
@@ -255,6 +274,8 @@ def main():
             rows.append((p, np.array([v[0], v[1], st.r_imu])))
             labels.append(f'{n}: {st.axis} {st.cmd:+.3f}')
     theta, rms = fit(rows, args.gain_per_direction)
+    if not args.fixes:
+        print(f'accelerometer turned by imu yaw {args.imu_yaw_deg:+.2f} deg into base_link')
     report(theta, rms, rows, labels)
 
 

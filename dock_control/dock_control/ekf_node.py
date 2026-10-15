@@ -125,6 +125,12 @@ class EkfNode(Node):
         self.chain = FiducialChain(p)
         self.exposure_ns = round(exposure_offset * 1e9)
         self.rate = p['imu']['rate']
+        # The IMU's yaw against base_link (imu.yaw_deg, measured with
+        # tools/imu_camera_alignment.py): its gravity-free x and y are turned into base_link's,
+        # a_base = R(yaw) a_imu. Its tilt needs nothing: gravity comes off at each sample's own
+        # roll and pitch.
+        yaw = math.radians(p['imu'].get('yaw_deg', 0.0))
+        self.imu_c, self.imu_s = math.cos(yaw), math.sin(yaw)
         # Once the commands have been zero (or absent) this long, the robot has
         # stopped: the EKF holds its velocity at zero (Ekf.zero_velocity).
         self.settle_s = p['ekf'].get('zupt_settle_s', 0.3)
@@ -173,6 +179,8 @@ class EkfNode(Node):
             return
         gx, gy = body_gravity_xy(o.x, o.y, o.z, o.w)    # gravity at this sample's roll, pitch
         ax, ay = a.x - gx, a.y - gy
+        ax, ay = (self.imu_c * ax - self.imu_s * ay,           # into base_link
+                  self.imu_s * ax + self.imu_c * ay)
         if not self.zeroed:
             self.zero(msg, t, ax, ay, w.z)
             return

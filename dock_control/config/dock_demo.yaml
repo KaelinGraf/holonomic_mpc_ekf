@@ -134,6 +134,11 @@
 #   run and 0.4-2.7 deg at the coupler, so the gate's NIS was dominated by heading: fixes whose
 #   position agreed within 1 sd were rejected, re-anchors followed, and at the coupler the
 #   position variance passed the abort limit (bag dock_20261013_234613).
+# - imu.yaw_deg: the IMU is turned -2.81 deg (bootstrap sd 0.03) against base_link, whose axes the
+#   camera mounting defines; ekf_node turns its gravity-free x and y by it. Measured 2026-10-15, after
+#   the camera was moved, by tools/imu_camera_alignment.py on the robot lifted and turned about all
+#   three axes in front of the board (bag imucam_20261015_001702; tilt pitch -2.5, roll +4.0 deg,
+#   which the per-sample gravity removal already handles).
 # - imu.sigma_a and imu.sigma_r_deg were measured on the robot (2026-10-13: the
 #   standard deviation of 60 s at rest, at 150 Hz) and replace the bench values
 #   0.02 m/s^2 and 0.15 deg/s.
@@ -153,7 +158,7 @@
 # the robot each pose's noise comes live with it, in RosInferenceResult's
 # covariance, and ekf_node carries that through the chain into R.
 dock:
-  imu:  {rate: 150, sigma_a: 0.022, sigma_r_deg: 0.026, q_scale: 4}     # sigmas measured
+  imu:  {rate: 150, sigma_a: 0.022, sigma_r_deg: 0.026, q_scale: 4, yaw_deg: -2.81}     # sigmas measured; yaw_deg 2026-10-15
   fid:  {rate: 15, delay_nominal: 0.05, sigma_p0: 0.004, sigma_th_deg: 0.5, d0: 1.0, gate: 100,
          sigma_th_floor_deg: 1.0}   # bench; the floor from the robot (2026-10-14)
   ekf:  {q_v: 4.5e-6, q_th: 3.8e-9, p_floor: 1.0e-8, sigma_v0: 0.1, buffer_s: 0.5, step_s: 0.005, zupt_settle_s: 0.3, zupt_sigma_v: 0.005,

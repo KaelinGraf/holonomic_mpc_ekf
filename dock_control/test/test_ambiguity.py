@@ -85,6 +85,24 @@ def node():
             os.environ['ROS_AUTOMATIC_DISCOVERY_RANGE'] = saved
 
 
+def test_the_imu_yaw_turns_its_accelerations_into_base_link(node):
+    """imu.yaw_deg (the IMU turned against the camera's axes) rotates each gravity-free sample."""
+    from sensor_msgs.msg import Imu
+    yaw = math.radians(node.p['imu'].get('yaw_deg', 0.0))
+    assert np.isclose(math.atan2(node.imu_s, node.imu_c), yaw)     # the config's angle
+    got = []
+    node.active, node.zeroed = True, False
+    node.zero = lambda msg, t, ax, ay, r: got.append((ax, ay))
+    m = Imu()
+    m.orientation.w = 1.0                   # level: no gravity in x, y
+    m.linear_acceleration.x, m.linear_acceleration.y = 1.0, 0.0
+    node.on_imu(m)
+    node.imu_c, node.imu_s = math.cos(1.2), math.sin(1.2)
+    node.on_imu(m)
+    expected = [(math.cos(yaw), math.sin(yaw)), (math.cos(1.2), math.sin(1.2))]
+    assert np.allclose(got, expected)
+
+
 def _pose(T_OM, msg_pose):
     q = rot_to_quat(T_OM[:3, :3])
     msg_pose.pose.position.x, msg_pose.pose.position.y, msg_pose.pose.position.z = T_OM[:3, 3]
