@@ -110,6 +110,8 @@ class EkfNode(Node):
         self.chain = FiducialChain(p)
         self.exposure_ns = round(exposure_offset * 1e9)
         self.rate = p['imu']['rate']
+        yaw = math.radians(p['imu'].get('yaw_deg', 0.0))
+        self.imu_c, self.imu_s = math.cos(yaw), math.sin(yaw)
         self.settle_s = p['ekf'].get('zupt_settle_s', 0.3)
 
         self.u = np.zeros(3)
@@ -154,6 +156,8 @@ class EkfNode(Node):
             return
         gx, gy = body_gravity_xy(o.x, o.y, o.z, o.w)
         ax, ay = a.x - gx, a.y - gy
+        ax, ay = (self.imu_c * ax - self.imu_s * ay,
+                  self.imu_s * ax + self.imu_c * ay)
         if not self.zeroed:
             self.zero(msg, t, ax, ay, w.z)
             return
