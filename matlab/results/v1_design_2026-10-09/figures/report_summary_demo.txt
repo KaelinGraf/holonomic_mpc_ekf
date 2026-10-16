@@ -1,0 +1,13 @@
+=== demo ===
+Monte Carlo, N = 30, start x in [-2.5,-0.8] m, y in [-0.4,0.4] m, yaw in [-20,20] deg
+  docked 30/30, inside coupler tolerance 30/30, inside internal target 26/30
+  lateral error at dock: rms 2.4 mm, max 5.6 mm (tolerance 12, target 4)
+  yaw error at dock: rms 0.14 deg, max 0.26 deg (tolerance 20, target 1.5)
+  docking time: mean 12.0 s, max 15.2 s; penetration max 10.1 mm; contact speed max 43 mm/s; max yaw 22 deg; fallbacks 0
+Sensitivity (start pose (-2, 0.3, 15 deg), seed 21): columns = lateral mm, yaw deg, dock s, penetration mm, max yaw deg, fallbacks
+  tau [s]      [0.05 0.336 0.191 13.6 3.41 16.7 0;0.1 1.29 0.116 15.3 3.86 16.5 0;0.2 0.445 0.925 15.6 2.08 18.3 0;0.3 1.74 0.19 23.6 4.23 19.2 0;0.5 NaN NaN NaN 0 19.9 0]
+  delay [s]    [0.01 0.168 0.148 13.6 0.556 15 0;0.05 1.29 0.116 15.3 3.86 16.5 0;0.1 0.322 0.0535 15.3 3.88 16.5 0;0.2 NaN NaN NaN 0 21.2 0]
+  noise scale  [1 1.29 0.116 15.3 3.86 16.5 0;2 4.16 0.000241 15.5 5.78 16.5 0;4 0.534 0.501 17.4 0.771 16.1 0]
+  bias scale   [1 1.29 0.116 15.3 3.86 16.5 0;2 0.697 0.353 13.5 0 16.5 0;4 NaN NaN NaN 0 16.5 0]
+Constraints: with -> dock 15.3 s, penetration 3.9 mm, max wheel 8.9 rad/s; without (clipped afterwards) -> dock 15.3 s, penetration 4.2 mm, max wheel 8.9 rad/s
+Estimator: EKF loop -> dock 15.3 s, y -1.3 mm, yaw -0.12 deg; perfect state -> dock 13.5 s, y 0.2 mm, yaw 0.01 deg

@@ -1,0 +1,2 @@
+variant,starts,docked,inside_window,inside_target,aborted,lateral_rms_mm,lateral_max_mm,heading_rms_deg,heading_max_deg,time_mean_s,time_max_s,penetration_max_mm,contact_speed_max_mms,runs_with_contact,speed_at_declaration_max_mms,fallbacks,rejected_fixes,reanchors,ticks_with_slack,max_heading_in_run_deg,nis_median
+fullscale,30,30,30,30,0,2.6659493231976876,5.824582117051073,0.0218701860358802,0.07907039433588876,14.183333333333334,20.000000000000004,0.0,,0,14.289237698657661,0,0,0,0,19.283474680284176,1.199313941976181
