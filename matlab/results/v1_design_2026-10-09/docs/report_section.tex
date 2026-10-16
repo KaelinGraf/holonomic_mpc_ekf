@@ -1,0 +1,416 @@
+% Report-ready section: docking estimator and controller.
+% Standalone-compilable; to use inside the thesis, \input the body between the markers
+% BODY-START / BODY-END and keep the macro block from the preamble.
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{lmodern}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,bm,mathtools}
+\usepackage{booktabs,array,tabularx}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!55!black,citecolor=blue!55!black,urlcolor=blue!55!black]{hyperref}
+\graphicspath{{../matlab/out/}}
+\setlength{\parskip}{4pt plus 1pt}
+\allowdisplaybreaks
+
+% ---- macro block (keep with the body) ----
+\newcommand{\vect}[1]{\bm{#1}}
+\newcommand{\mat}[1]{\bm{#1}}
+\newcommand{\T}{^{\mathsf{T}}}
+\newcommand{\Real}{\mathbb{R}}
+\newcommand{\diag}{\operatorname{diag}}
+\DeclareMathOperator{\blkdiag}{blkdiag}
+\newcommand{\Rot}{\mat{R}}
+\newcommand{\dU}{\Delta\vect{U}}
+\newcommand{\du}{\Delta\vect{u}}
+\newcommand{\Ts}{T_s}
+\newcommand{\Np}{N_p}
+\newcommand{\Nc}{N_c}
+\newcommand{\Qbar}{\bar{\mat{Q}}}
+\newcommand{\Rbar}{\bar{\mat{R}}}
+\newcommand{\ones}{\vect{1}}
+\newcommand{\hx}{\hat{\vect x}}
+% ------------------------------------------
+
+\title{Docking estimator and controller: design and verification}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-2em}
+
+% BODY-START
+\section{Problem statement}
+\label{sec:problem}
+
+The docking task is to bring a holonomic four-wheel mecanum chassis from a start pose within marker range to a genderless coupler on a stationary target, and to stop inside the coupler's capture envelope. Two instances of the same design are treated: a full-scale barrier robot (600~kg) that exists only in simulation, and a tabletop demonstrator built from VEX components with a Raspberry Pi~5 running ROS~2. Both share one estimator, one controller structure and one parameter file; only the numerical values differ.
+
+\paragraph{Frame.} All docking quantities are expressed in the target frame $T$, whose origin is the chassis-centre position when docked, with $x_T$ pointing into the target and $y_T$ to the left. The docked reference pose is $(0,0,0)$; the robot approaches from $x<0$ with $\dot x>0$. The frame is pinned to the stationary target, so the world position is not needed once the marker is acquired, and the same estimator and controller serve both instances.
+
+\paragraph{Sensors and rates.} An inertial measurement unit provides gravity-compensated body-frame accelerations and yaw rate at 200~Hz. A camera and a fiducial marker on the target provide a six-degree-of-freedom relative pose at 15~Hz with a capture-to-availability delay of 50~ms. The full-scale robot carries RTK-GNSS with a dual-antenna heading; it is used by a separate navigation estimator to bring the robot into marker range and plays no part in the docking loop.
+
+\paragraph{Requirements.} Table~\ref{tab:req} lists the coupler tolerances and the internal targets the design aims for. Only $x$, $y$ and yaw are controllable; the vertical and pitch channels are monitored. The internal targets leave margin for estimation error and for the lag of the wheel loops; they are the pass criteria of the closed-loop tests, while the tolerances are the requirement.
+
+\begin{table}[H]
+\centering\small
+\caption{Coupler tolerances and internal targets.}
+\label{tab:req}
+\begin{tabular}{lcccc}
+\toprule
+ & \multicolumn{2}{c}{Full scale} & \multicolumn{2}{c}{Demonstrator} \\
+ & tolerance & target & tolerance & target \\
+\midrule
+lateral $y$ & $\pm 80$~mm & $\pm 27$~mm & $\pm 12$~mm & $\pm 4$~mm \\
+yaw $\theta$ & $\pm 20^\circ$ & $\pm 1.5^\circ$ & $\pm 20^\circ$ & $\pm 1.5^\circ$ \\
+vertical (monitored) & $\pm 40$~mm & -- & $\pm 6$~mm & -- \\
+pitch (monitored) & $\pm 10^\circ$ & -- & $\pm 10^\circ$ & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The heading target follows from the lateral one through the coupler lever arm $L_k$ (1~m and 0.15~m): a heading error $\theta$ displaces the coupler tip by $L_k\theta$, and $\theta_{\mathrm{tgt}} = y_{\mathrm{tgt}}/L_k \approx 1.5^\circ$ for both instances.
+
+\section{State estimation}
+\label{sec:ekf}
+
+\subsection{Process model}
+The state is $\vect x = [x,\ y,\ \theta,\ v_x,\ v_y]\T$: chassis-centre position and velocity in $T$ and the heading of the body $x$-axis relative to $x_T$. The IMU supplies the inputs $\vect u = [a_x,\ a_y,\ r]\T$, body-frame acceleration and yaw rate, so no vehicle dynamics are modelled: the filter is driven by the measured motion and the velocity states are the integral of the rotated accelerations,
+\begin{equation}
+\dot x = v_x,\qquad \dot y = v_y,\qquad \dot\theta = r,\qquad
+\begin{bmatrix}\dot v_x\\ \dot v_y\end{bmatrix} = \Rot(\theta)\begin{bmatrix}a_x\\ a_y\end{bmatrix},\qquad
+\Rot(\theta) = \begin{bmatrix}\cos\theta & -\sin\theta\\ \sin\theta & \cos\theta\end{bmatrix}.
+\label{eq:ekf-ct}
+\end{equation}
+The yaw rate is an input rather than a state because the gyro measures it directly and the fiducial cannot correct it; a yaw-rate state would be observable only through the heading and would add nothing. Residual sensor biases after calibration are treated as noise, not as states, which is adequate for the sensor grades considered (Section~\ref{sec:params}).
+
+Euler discretisation at the IMU period $T = 1/200$~s gives the map $\vect x_{k+1} = \vect f(\vect x_k, \vect u_k)$,
+\begin{equation}
+\vect f(\vect x,\vect u) = \vect x + T\begin{bmatrix} v_x\\ v_y\\ r\\ a_x\cos\theta - a_y\sin\theta\\ a_x\sin\theta + a_y\cos\theta\end{bmatrix},
+\label{eq:ekf-f}
+\end{equation}
+whose Jacobians at the current estimate are
+\begin{equation}
+\mat F_k = \frac{\partial\vect f}{\partial\vect x} = \mat I_5 + T\begin{bmatrix}
+0&0&0&1&0\\ 0&0&0&0&1\\ 0&0&0&0&0\\
+0&0&-(a_x\sin\theta + a_y\cos\theta)&0&0\\
+0&0&\phantom{-}(a_x\cos\theta - a_y\sin\theta)&0&0\end{bmatrix},\qquad
+\mat G_k = \frac{\partial\vect f}{\partial\vect u} = T\begin{bmatrix}
+0&0&0\\ 0&0&0\\ 0&0&1\\ \cos\theta&-\sin\theta&0\\ \sin\theta&\cos\theta&0\end{bmatrix}.
+\label{eq:ekf-FG}
+\end{equation}
+The mean is propagated through~(\ref{eq:ekf-f}) and the covariance through~(\ref{eq:ekf-FG}):
+\begin{equation}
+\hx_{k+1}^- = \vect f(\hx_k, \vect u_k),\qquad
+\mat P_{k+1}^- = \mat F_k\mat P_k\mat F_k\T + \mat G_k\mat\Sigma_u\mat G_k\T + \mat Q_{\mathrm{floor}} .
+\label{eq:ekf-pred}
+\end{equation}
+$\mat\Sigma_u = q\,\diag(\sigma_a^2,\sigma_a^2,\sigma_r^2)$ is the per-sample IMU noise inflated by $q=4$ to cover the unmodelled residual bias, and $\mat Q_{\mathrm{floor}} = \diag(10^{-8},10^{-8},q_\theta,q_v,q_v)$ is a small additive floor whose velocity and heading entries are the tuning parameters of the filter. They are chosen by the consistency test of Section~\ref{sec:ekf-tests}: a sweep of $q_v$ against the 20-run normalised estimation error squared (NEES), taking the value at which the filter is neither over- nor under-confident.
+
+\subsection{Fiducial measurement}
+The pose solver returns the marker relative to the camera. With the marker's position $\vect m$ and yaw $\psi_0$ in $T$ known, and the camera lever arm $\vect l_c$ from the chassis centre known, a deterministic pre-transform of the raw output,
+\begin{equation}
+\theta_z = \psi_0 - \psi,\qquad \vect p_z = \vect m - \Rot(\theta_z)(\vect t + \vect l_c),
+\label{eq:fid-chain}
+\end{equation}
+yields a pseudo-measurement of the first three states. The measurement model is therefore linear,
+\begin{equation}
+\vect z = \begin{bmatrix}\vect p_z\\ \theta_z\end{bmatrix} = \mat H\vect x + \vect v,\qquad
+\mat H = \begin{bmatrix}\mat I_3 & \mat 0_{3\times 2}\end{bmatrix},\qquad
+\mat R(d) = \diag\big(\sigma_p^2(d),\ \sigma_p^2(d),\ \sigma_\theta^2\big),
+\label{eq:fid-model}
+\end{equation}
+with $\sigma_p(d) = \sigma_{p,0}\sqrt{1 + (d/d_0)^2}$ growing with range $d$ because the solver's yaw error enters $\vect p_z$ through $\Rot(\theta_z)\vect t$. $\mat R$ is to be measured on the bench in the transformed coordinates at a few ranges; the simulation uses the stated model.
+
+\subsection{Correction with delayed measurements}
+A fix captured at sample $k_c$ becomes available at $k_a = k_c + 10$. The filter keeps a ring buffer of its 200~Hz estimates and forms the innovation against the buffered estimate at the capture time, applying the correction to the current state:
+\begin{gather}
+\vect\nu = \vect z - \mat H\hx_{k_c},\quad \nu_3 \text{ wrapped to } (-\pi,\pi],\qquad
+\mat S = \mat H\mat P_{k_a}^-\mat H\T + \mat R,\qquad
+\mat K = \mat P_{k_a}^-\mat H\T\mat S^{-1},\\
+\hx_{k_a} = \hx_{k_a}^- + \mat K\vect\nu,\qquad
+\mat P_{k_a} = (\mat I - \mat K\mat H)\mat P_{k_a}^-(\mat I - \mat K\mat H)\T + \mat K\mat R\mat K\T .
+\label{eq:ekf-upd}
+\end{gather}
+The Joseph form keeps the covariance symmetric and positive definite under the repeated small updates of a 15~Hz sensor. The buffered innovation removes the lag bias that an uncompensated update introduces during motion, which at 0.2~m/s and 50~ms is 10~mm, comparable to the demonstrator's lateral tolerance.
+
+\subsection{Outlier gate}
+Each fix is accepted only if $\vect\nu\T\mat S^{-1}\vect\nu \le 100$. The statistic is chi-square with three degrees of freedom for a consistent filter, so a genuine fix essentially never fails the test, while a wrong marker identification or a degenerate pose solve (a jump of tens of centimetres or a heading flip) produces a statistic above $10^3$. The threshold is deliberately far above the 99.9\,\% quantile of 16.3: a tight gate rejects every fix when the filter's model is wrong, for instance when the target starts to move, and the filter then diverges instead of recovering. The stress tests of Section~\ref{sec:ekf-tests} place the largest legitimate statistic near 40.
+
+\subsection{Initialisation and schedule}
+The docking filter is initialised from the first accepted fix with zero velocity, $\hx_0 = [\vect z;\ 0;\ 0]$, $\mat P_0 = \blkdiag(\mat R,\ \sigma_{v0}^2\mat I_2)$; the full-scale robot may instead seed it from the navigation estimate transformed into $T$. The schedule is: predict on every IMU sample; apply every fix on arrival against its capture-time buffer entry; store the post-correction estimate in the buffer. Marker loss is not handled inside the filter; the supervisor holds the robot after 0.5~s without a fix and aborts after 2~s, the coast time over which the dropout test shows the estimate staying inside the coupler tolerance.
+
+\section{Model predictive control}
+\label{sec:mpc}
+
+\subsection{Plant model and successive linearisation}
+The controller commands the body velocity $\vect u = [u_b,\ v_b,\ r_b]\T$ and relies on the wheel-speed loops to realise it; the plant it controls is the pose kinematics in $T$,
+\begin{equation}
+\vect x_c(k+1) = \vect f_c(\vect x_c,\vect u) = \vect x_c + \Ts\begin{bmatrix} u_b\cos\theta - v_b\sin\theta\\ u_b\sin\theta + v_b\cos\theta\\ r_b\end{bmatrix},\qquad \vect x_c = \begin{bmatrix}x\\ y\\ \theta\end{bmatrix},
+\label{eq:mpc-fc}
+\end{equation}
+at the controller period $\Ts = 50$~ms. The model is nonlinear in the heading. Rather than linearise once at the docked equilibrium, where $\mat B = \Ts\mat I$ and the three axes decouple, the Jacobians are re-evaluated every tick at the current estimate and the last command,
+\begin{equation}
+\mat A_k = \mat I_3 + \Ts\begin{bmatrix}0&0&-(\bar u_b\sin\bar\theta + \bar v_b\cos\bar\theta)\\ 0&0&\bar u_b\cos\bar\theta - \bar v_b\sin\bar\theta\\ 0&0&0\end{bmatrix},\qquad
+\mat B_k = \Ts\begin{bmatrix}\cos\bar\theta & -\sin\bar\theta & 0\\ \sin\bar\theta & \cos\bar\theta & 0\\ 0&0&1\end{bmatrix},
+\label{eq:mpc-AB}
+\end{equation}
+and held constant over the prediction horizon. The affine remainder of a linearisation away from equilibrium cancels in the incremental formulation that follows, so the successive linearisation costs no extra term.
+
+\subsection{Augmented incremental model and prediction}
+With $\mat C = \mat I_3$, all three pose components being controlled outputs, the incremental augmented model is
+\begin{equation}
+\vect x_p(k) = \begin{bmatrix}\Delta\vect x_c(k)\\ \vect x_c(k)\end{bmatrix}\in\Real^6,\qquad
+\mat A_p = \begin{bmatrix}\mat A_k & \mat 0\\ \mat A_k & \mat I_3\end{bmatrix},\qquad
+\mat B_p = \begin{bmatrix}\mat B_k\\ \mat B_k\end{bmatrix},\qquad
+\mat C_p = \begin{bmatrix}\mat 0 & \mat I_3\end{bmatrix},
+\label{eq:mpc-aug}
+\end{equation}
+which carries integral action through its three unit eigenvalues. The initial increment is taken from the estimator rather than by differencing two poses,
+\begin{equation}
+\Delta\vect x_c(k) = \Ts\,[\hat v_x,\ \hat v_y,\ r_k]\T,
+\label{eq:mpc-dx}
+\end{equation}
+with the yaw rate from the gyro. This is also the disturbance-rejection path: slip or lag that leaves the measured velocity short of the command appears in $\Delta\vect x_c$ and is corrected by the optimiser. Stacking $\Np = 40$ predicted outputs and $\Nc = 10$ future increments,
+\begin{equation}
+\vect Y = \mat F\vect x_p(k) + \mat\Phi\,\dU,\qquad
+\mat F = \begin{bmatrix}\mat C_p\mat A_p\\ \vdots\\ \mat C_p\mat A_p^{\Np}\end{bmatrix},\qquad
+[\mat\Phi]_{ij} = \mat C_p\mat A_p^{\,i-j}\mat B_p\ \ (i\ge j),
+\label{eq:mpc-pred}
+\end{equation}
+both rebuilt every tick with $\mat A_k$, $\mat B_k$.
+
+\subsection{Cost}
+\begin{equation}
+J = (\vect Y_r - \vect Y)\T\Qbar(\vect Y_r - \vect Y) + \dU\T\Rbar\dU,\qquad
+\Qbar = \mat I_{\Np}\otimes\mat Q_y,\quad \Rbar = r_w\,\mat I_{\Nc}\otimes\mat R_u,
+\label{eq:mpc-J}
+\end{equation}
+with $\vect Y_r$ the reference pose repeated over the horizon. The weights follow Bryson's rule,
+\begin{equation}
+\mat Q_y = \diag\big(y_{\mathrm{tol}}^{-2},\ y_{\mathrm{tol}}^{-2},\ \theta_{\mathrm{tgt}}^{-2}\big),\qquad
+\mat R_u = \diag\big(\Delta u_{\max,i}^{-2}\big),\qquad
+\Delta\vect u_{\max} = \Ts\,[a_{\max},\ a_{\max},\ \alpha_{\max}]\T,
+\label{eq:mpc-weights}
+\end{equation}
+so that a position error equal to the coupler tolerance, a heading error equal to the internal target and an increment equal to its limit each cost one unit, and $r_w$ is the single scalar tuning knob. The asymmetry between the position and heading levels is deliberate. The heading column of $\mat A_k$ makes the heading a lateral actuator through the forward speed, a double-integrator path that passes through the wheel lag the kinematic model omits. With the lateral error weighted on the internal target, nine times heavier, the optimiser steers with the heading: on the demonstrator the heading swung by $\pm 20^\circ$ during the approach and the yaw-rate command alternated at its increment limit. Weighted on the tolerance it crabs instead, the motion the chassis is built for, and the heading stays within a degree of zero after the initial turn. Accuracy at the dock does not depend on the weight but on the integral action: the lateral error at docking stays inside the internal target in every closed-loop test.
+
+\subsection{Constraints}
+With $\mat C_1 = \ones_{\Nc}\otimes\mat I_3$ and $\mat C_2 = \mat L_{\Nc}\otimes\mat I_3$ ($\mat L$ lower-triangular ones) the commands over the control horizon are $\vect U = \mat C_1\vect u(k-1) + \mat C_2\dU$, and every constraint is linear in $\dU$:
+\begin{enumerate}
+\item \emph{Increments}, the acceleration limits that prevent wheel slip: $|\du(k+j)|\le\Delta\vect u_{\max}$, $6\Nc$ rows.
+\item \emph{Amplitudes}: the translational speed cap as the L1 bound $|u_b|+|v_b|\le v_{\max}$ through its four facets, and $|r_b|\le r_{\max}$, $6\Nc$ rows. The L1 set is used instead of a box because a box is 41\,\% faster along its diagonal and the optimiser yaws the body to exploit it; the L1 set bounds the speed norm in every direction and is the shape of the wheel-speed limit at zero yaw rate, so the chassis is fastest along its own axes. $v_{\max}$ is 0.3~m/s in the approach and 0.05~m/s in the final stage.
+\item \emph{Wheel speeds}, the inverse kinematics inside the controller: $|(\mat I_{\Nc}\otimes\mat J^{-})\vect U|\le\omega_{\max}$, $8\Nc$ rows, with $\mat J^{-}$ the mecanum inverse kinematics (Section~\ref{sec:params}).
+\item \emph{No penetration}: the predicted $x$ must not pass the end of the coupler's engagement travel, $x(k+j)\le x_{\max} = 10$~mm, $\Np$ rows. A plane at first contact makes the controller bounce on it under wheel lag; the band lets it settle.
+\item \emph{Heading corridor}: $|\theta(k+j)|\le 20^\circ$, $2\Np$ rows, keeping the marker in view and bounding the heading excursion.
+\end{enumerate}
+The two output constraints are implemented soft, with one slack $s\ge 0$ subtracted from each row and a linear penalty $\rho_s s$ added to the cost. A linear penalty larger than the largest constraint multiplier is exact: the slack is zero whenever the hard constraint can be met, whereas a quadratic penalty always trades a small violation against tracking. Softness is necessary, not cosmetic: once the estimate sits a few millimetres past the plane, which wheel lag and estimation noise make routine at contact, no increment sequence inside the acceleration limit satisfies a hard row at the first prediction steps and the programme has no feasible point. The hard rows are feasible whenever the previous command satisfies the amplitude limits, which the supervisor guarantees by lowering the cap at the increment rate rather than stepping it. The assembled set $\mat M\dU\le\vect\gamma$ has $20\Nc + 3\Np = 320$ rows against 30 decision variables plus the slack; the output blocks of $\mat M$ change every tick with $\mat\Phi$.
+
+\subsection{Quadratic programme and solver}
+Discarding the constant term, each tick solves
+\begin{gather}
+\min_{\vect z}\ \tfrac12\vect z\T\mat E_{\mathrm{ext}}\vect z + \vect z\T\vect f_{\mathrm{ext}}
+\quad\text{s.t.}\quad \mat M_{\mathrm{ext}}\vect z\le\vect\gamma,\ \ s\ge 0,\qquad
+\vect z = \begin{bmatrix}\dU\\ s\end{bmatrix},
+\label{eq:mpc-qp}\\
+\mat E = 2(\mat\Phi\T\Qbar\mat\Phi + \Rbar),\qquad
+\vect f = -2\mat\Phi\T\Qbar(\vect Y_r - \mat F\vect x_p),
+\end{gather}
+with $\mat E$ bordered by a small positive entry for the slack and $\rho_s$ appended to $\vect f$. Only the first increment $\du(k) = [\mat I_3\ \mat 0\cdots]\dU^\star$ is applied; the command $\vect u(k) = \vect u(k-1) + \du(k)$ goes to the wheel loops as $\vect\omega = \mat J^{-}\vect u(k)$. In MATLAB the programme is solved by the active-set algorithm from the feasible start $\dU = \vect 0$ with just enough slack, retried with the interior-point algorithm if the active-set method stalls on a degenerate vertex, as it does when the robot drives at the vertex of the L1 cap with two wheels at their limit; if both fail the tick applies a safe stop (every axis decelerated by its largest increment) and the event is logged. One tick costs about 17~ms against the 50~ms period. On the demonstrator the same programme is passed to OSQP.
+
+\subsection{Supervisor}
+A three-stage supervisor sets the reference and the cap. In the approach stage the reference is a standoff pose 0.30~m before the dock with the approach cap; when the estimated lateral error and heading are within 10~mm and $1^\circ$ at the standoff, the reference switches to the origin and the cap is lowered at the increment rate to the final value; docking is declared when the estimated $x$ is within 3~mm of the contact plane, the estimated speed is below 20~mm/s and the estimated lateral and heading errors are inside the internal targets, after which the command is zero. The alignment condition matters: without it one of thirty demonstrator runs was declared docked while the lateral error was still converging and ended 0.7~mm outside the tolerance. Loss of the marker for more than 0.5~s holds the robot, and for more than 2~s aborts the approach.
+
+\section{Verification}
+\label{sec:verif}
+
+\subsection{Simulation environment}
+The estimator is tested against an analytic truth trajectory (a staged quintic approach from 2~m) with simulated sensors: IMU samples with white noise and a residual bias, fiducial fixes on the 15~Hz grid with range-dependent noise, a 50~ms delivery delay and optional dropout. The controller is tested on a truth plant with first-order wheel-speed loops of time constant $\tau$ (0.3~s full scale, 0.1~s demonstrator), a slowly varying body-velocity slip offset, and IMU outputs derived from the plant motion, so that the closed loop contains everything the kinematic model omits. All tests run for both instances from the single parameter file of Section~\ref{sec:params}.
+
+\subsection{Estimator tests}
+\label{sec:ekf-tests}
+\begin{table}[H]
+\centering\small
+\caption{Estimator tests and results (identical for both instances unless stated).}
+\label{tab:ekf-tests}
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{3.4cm} X >{\raggedright\arraybackslash}p{5.2cm}}
+\toprule
+Test & Criterion & Result \\
+\midrule
+Jacobians & $\mat F_k$, $\mat G_k$ against central finite differences of~(\ref{eq:ekf-f}), $10^{-6}$ & $1.4\times10^{-10}$, $3.0\times10^{-11}$ \\
+Noise-free tracking & zero noise and bias: frames, signs and delay bookkeeping; limits 3~mm, $0.05^\circ$, 10~mm/s & 0.90~mm, $0.014^\circ$, 5.3~mm/s (Euler residual) \\
+Delay compensation & cruise at 0.2~m/s: mean $x$ error with the buffered innovation below 2~mm & $-8.5$~mm uncompensated, $1.6$~mm compensated \\
+Target velocity step & target starts moving at 0.05 and 0.2~m/s; recovery of the velocity estimate from fixes alone & recovery 0.75~s and 1.20~s; peak error 10~mm and 35~mm; no fix rejected \\
+Marker dropout & 2~s coast on the IMU; time inside the coupler tolerance, error inside $3\sigma$, fixes accepted on return & full scale: inside 80~mm for the full 2.0~s; demonstrator: inside 12~mm for 0.21~s (three frames); error/$3\sigma$ 0.6; none rejected \\
+Consistency & 20-run NEES inside the 95\,\% band $[3.71, 6.48]$ with the marker visible & full scale 3.21 (conservative), demonstrator 5.32; error inside $3\sigma$ 99.5\,\% and 98.0\,\% of the time \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The full-scale filter is slightly conservative at the chosen $q_v$; the sweep indicates $q_v = 4.5\times10^{-7}$ would centre it, left at the larger value for margin against the IMU bias assumption. The demonstrator cannot hold its 12~mm tolerance on the IMU alone for more than a few frames of marker loss, which fixes the supervisor's hold time and makes continuous marker visibility a requirement of the demonstrator rather than of the design.
+
+\subsection{Controller tests}
+\begin{table}[H]
+\centering\small
+\caption{Controller unit tests (full-scale parameters).}
+\label{tab:mpc-tests}
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{3.4cm} X >{\raggedright\arraybackslash}p{4.6cm}}
+\toprule
+Test & Criterion & Result \\
+\midrule
+Kinematics & wheel signs for forward, left and yaw; $\mat J^{+}\mat J^{-} = \mat I$; null vector $[1,1,-1,-1]\T$ & all pass, $5.6\times10^{-16}$ \\
+Linearisation & $\mat A_k$, $\mat B_k$ against finite differences of~(\ref{eq:mpc-fc}) & $9.3\times10^{-11}$, $2.4\times10^{-11}$ \\
+Prediction & $\mat F$, $\mat\Phi$ against brute-force stepping of~(\ref{eq:mpc-aug}), and the decoupled SISO blocks against the course's \texttt{mpcgain.m} & $1.8\times10^{-15}$ and exact \\
+Unconstrained tick & limits removed: \texttt{mpc\_step} equals the closed form & relative error $6\times10^{-16}$ \\
+Constrained tick & from 0.5~m out at the cap: every increment, amplitude, wheel speed and predicted output inside its limit; 320 rows; cap active & pass, $\vect u = [0.300,\ 0,\ -0.025]$, max predicted $x = x_{\max}$ \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Closed-loop results}
+\begin{table}[H]
+\centering\small
+\caption{Closed-loop docking from three start poses with perfect state feedback, and with the estimator in the loop from $(-2~\text{m},\ 0.3~\text{m},\ 15^\circ)$. Pass criteria: docked within 40~s; lateral and yaw error at docking inside the internal targets; penetration below the engagement band plus the lag coast $v_{\mathrm{final}}\tau$; contact speed below $1.5\,v_{\mathrm{final}}$; wheel limit respected; no solver fallback; no fix rejected.}
+\label{tab:closed}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llccccc}
+\toprule
+Instance & Start $(x, y, \theta)$ & dock [s] & $|y|$ [mm] & $|\theta|$ [deg] & penetr. [mm] & contact [mm/s] \\
+\midrule
+full scale & $(-2.0,\ 0.30,\ 15^\circ)$ & 14.8 & 1.9 & 0.63 & 2.1 & 5 \\
+full scale & $(-1.5,\ -0.40,\ -20^\circ)$ & 13.3 & 1.9 & 0.19 & 0.0 & 0 \\
+full scale & $(-0.6,\ 0.02,\ 2^\circ)$ & 8.1 & 2.1 & 0.66 & 2.2 & 5 \\
+full scale, EKF & $(-2.0,\ 0.30,\ 15^\circ)$ & 15.8 & 2.6 & 0.26 & 0.0 & 2 \\[-1pt]
+demonstrator & $(-2.0,\ 0.30,\ 15^\circ)$ & 13.9 & 0.3 & 0.00 & 4.5 & 11 \\
+demonstrator & $(-1.5,\ -0.40,\ -20^\circ)$ & 11.2 & 0.0 & 0.00 & 0.8 & 11 \\
+demonstrator & $(-0.6,\ 0.02,\ 2^\circ)$ & 7.6 & 0.3 & 0.00 & 2.0 & 9 \\
+demonstrator, EKF & $(-2.0,\ 0.30,\ 15^\circ)$ & 15.3 & 1.3 & 0.12 & 3.9 & 20 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Every run docks inside the internal targets with margin to the tolerances; the estimator in the loop costs one to two seconds of docking time and a few millimetres of lateral error. Figures~\ref{fig:ts-demo} and~\ref{fig:ts-full} show the pose histories with the estimator in the loop; Figure~\ref{fig:cmd-demo} the commands, increments and wheel speeds against their limits.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.9\linewidth]{mpc_demo_timeseries.png}
+\caption{Demonstrator, estimator in the loop: pose in the target frame, true (black) and estimated (blue), with the stage switches (magenta), the standoff and the internal targets (green).}
+\label{fig:ts-demo}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.9\linewidth]{mpc_fullscale_timeseries.png}
+\caption{Full scale, estimator in the loop. The $\pm1^\circ$ heading ripple is the yaw loop against the 0.3~s wheel lag the kinematic model omits.}
+\label{fig:ts-full}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.9\linewidth]{mpc_demo_commands.png}
+\caption{Demonstrator: body-velocity commands, their increments and the resulting wheel speeds against the limits. The increment limit is active during the initial turn and the deceleration at the standoff; the wheel limit never is.}
+\label{fig:cmd-demo}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.9\linewidth]{mpc_demo_plane.png}
+\caption{Demonstrator: path in the target frame with the predicted trajectories at five ticks. The predictions curve as the linearisation point moves.}
+\label{fig:plane-demo}
+\end{figure}
+
+\paragraph{Repeatability.} Figure~\ref{fig:mc-demo} and Figure~\ref{fig:mc-full} show 30 runs per instance with the estimator in the loop from start poses drawn uniformly in $x\in[-2.5,-0.8]$~m, $y\in[-0.4,0.4]$~m, $\theta\in[-20^\circ,20^\circ]$ and independent noise seeds. At full scale all thirty runs dock inside both the tolerance and the internal target: lateral error 3.5~mm rms and 9.2~mm maximum against the 27~mm target, yaw 0.41$^\circ$ rms and 0.61$^\circ$ maximum, docking time 13.3~s mean and 17.9~s maximum, penetration at most 8.2~mm inside the 10~mm band, contact speed at most 12~mm/s, no solver fallback. On the demonstrator all thirty runs dock inside the coupler tolerance and 26 inside the internal target: lateral error 2.4~mm rms and 5.6~mm maximum against the 4~mm target and 12~mm tolerance, yaw at most 0.26$^\circ$, docking time 12.0~s mean and 15.2~s maximum, penetration at most 10.1~mm, contact speed at most 43~mm/s. The four demonstrator runs outside the internal target are estimator-limited: the fiducial noise assumed for the demonstrator, 4~mm per fix, equals the target itself, and the docked declaration, which uses the estimate, cannot resolve the pose better than the estimate does.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\linewidth]{report_demo_montecarlo.png}
+\caption{Demonstrator, 30 random start poses: final lateral and yaw error against the coupler tolerance (red) and the internal target (green); docking time, penetration and contact-speed distributions.}
+\label{fig:mc-demo}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\linewidth]{report_fullscale_montecarlo.png}
+\caption{Full scale, 30 random start poses.}
+\label{fig:mc-full}
+\end{figure}
+
+\paragraph{Sensitivity.} Figure~\ref{fig:sens-demo} varies one assumption at a time with the filter and controller unaware of the change: the wheel-loop time constant, the fiducial delay, the sensor noise level and the IMU bias. At full scale the design is insensitive over the ranges tested: the wheel lag may rise to 0.5~s (penetration 5.6~mm, docking 19.8~s), the fiducial delay to 0.2~s (lateral error 8~mm) and the IMU bias to four times its assumed value (docking 29~s) without leaving the targets; only sensor noise at four times the assumed level prevents the alignment condition from being met within 40~s. The demonstrator's margins are narrower, as its 12~mm tolerance implies: it docks with the lag up to 0.3~s (23.6~s), the delay up to 0.1~s, the noise up to four times and the bias up to twice the assumed values, and does not declare docking at a 0.5~s lag, a 0.2~s delay or four times the bias. These figures bound what the bench must deliver: a wheel-loop time constant below 0.2~s, a fiducial latency below 0.1~s and a residual accelerometer bias within twice the 0.03~m/s$^2$ assumed, each of which the calibration procedure checks before the first closed-loop run.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{report_demo_sensitivity.png}
+\caption{Demonstrator sensitivity: lateral error at docking, penetration and docking time against the wheel lag, the fiducial delay, the sensor-noise scale and the IMU-bias scale (blue: nominal; green: target or band).}
+\label{fig:sens-demo}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{report_fullscale_sensitivity.png}
+\caption{Full-scale sensitivity.}
+\label{fig:sens-full}
+\end{figure}
+
+\paragraph{Role of the constraints.} Figure~\ref{fig:cons} repeats the nominal run with every constraint removed from the optimisation and the command clipped to the same limits afterwards, the comparison of the course notes' cart-pendulum example. In the nominal run the two controllers behave alike: the limits that are active, the speed cap and the wheel limit, are enforced equally well by clipping, and the output constraints are inactive because the final approach is slow enough for the tracking cost alone to stop the robot inside the band (penetration 3.9~mm against 4.2~mm on the demonstrator, none in either case at full scale). The constraints in the optimiser earn their place elsewhere. The output rows cannot be enforced by clipping at all; they are the protection against penetration and heading excursion when the lag or the closing speed exceeds the nominal values, and the constrained formulation gives the predicted trajectory a feasibility guarantee that the clipped one lacks. The comparison shows that the nominal performance does not rest on the constraints, not that they are redundant.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.9\linewidth]{report_demo_constraints.png}
+\caption{Demonstrator: constraints inside the optimiser (black) against limits applied by clipping afterwards (red): longitudinal position, the approach to the contact plane and the largest wheel speed.}
+\label{fig:cons}
+\end{figure}
+
+\paragraph{Estimator in the loop.} Figure~\ref{fig:est} overlays the nominal run on perfect state feedback. The estimator costs one to two seconds of docking time (15.8~s against 14.6~s at full scale, 15.3~s against 13.5~s on the demonstrator) and a few millimetres of final lateral error (2.6~mm against 0.6~mm; 1.3~mm against 0.2~mm), all inside the internal targets, and the estimate stays within its stated covariance throughout. The certainty-equivalence design, the controller acting on the estimate as if it were the state, holds for this loop.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.9\linewidth]{report_demo_estimator.png}
+\caption{Demonstrator: perfect state feedback (black) against the estimator in the loop, true pose (blue) and estimate (dotted).}
+\label{fig:est}
+\end{figure}
+
+\subsection{Limitations}
+Three effects remain in the results and are attributable to the kinematic plant model. The robot overshoots the contact plane by up to $v_{\mathrm{final}}\tau$ before the wheel loops respond, which the engagement band absorbs; the full-scale yaw loop rings at $\pm1^\circ$ against its 0.3~s lag; and with a large lateral error the optimiser still steers mildly with the heading during the approach. All three are removed by the six-state lag model (design document, Section~4.8), which adds the body velocity as a state with the measured time constant, at the cost of a nine-state augmented model; it is the recommended refinement once the step test on the demonstrator's wheels gives $\tau$. The moving-target case is excluded from the design and treated as future work: the estimator and controller already absorb a constant target velocity (Table~\ref{tab:ekf-tests}), and a cooperative formulation with the target's broadcast state as a measurement is formulated in the design document.
+
+\section{Parameters}
+\label{sec:params}
+\begin{table}[H]
+\centering\footnotesize
+\caption{Parameters of both instances (bench values on the demonstrator to replace the placeholders).}
+\label{tab:params}
+\setlength{\tabcolsep}{4pt}
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{2.6cm} X >{\raggedright\arraybackslash}p{3.3cm} >{\raggedright\arraybackslash}p{3.3cm}}
+\toprule
+Symbol & Meaning & Full scale & Demonstrator \\
+\midrule
+$T$, $T_s$, $\Np$, $\Nc$ & IMU period, controller period, horizons & 5~ms, 50~ms, 40, 10 & same \\
+$\sigma_a$, $\sigma_r$ & IMU per-sample noise (GQ7 class; BNO085 class) & 0.002~m/s$^2$, $0.03^\circ$/s & 0.02~m/s$^2$, $0.15^\circ$/s \\
+$q$, $q_v$, $q_\theta$ & input-noise inflation; process-noise floor per step & 4, $1.5\times10^{-6}$, $1.1\times10^{-10}$ & 4, $4.5\times10^{-6}$, $3.8\times10^{-9}$ \\
+$\sigma_{p,0}$, $d_0$, $\sigma_\theta$, $\tau_d$ & fiducial noise at range, delay & 5~mm, 1~m, $0.5^\circ$, 50~ms & 4~mm, 1~m, $0.5^\circ$, 50~ms \\
+gate & fiducial innovation gate & 100 & 100 \\
+$L_k$; $R_w$, $l_x$, $l_y$ & coupler lever arm; wheel radius, half wheelbase, half track & 1~m; 0.10, 0.60, 0.45~m & 0.15~m; 0.051, 0.15, 0.15~m \\
+$v_{\max}$ approach / final & L1 speed cap & 0.3 / 0.05~m/s & same \\
+$a_{\max}$, $\alpha_{\max}$, $r_{\max}$, $\omega_{\max}$ & acceleration, yaw acceleration, yaw rate, wheel speed & 0.3~m/s$^2$, 0.5~rad/s$^2$, 0.3~rad/s, 4~rad/s & 0.5, 1.0, 0.5, 15 \\
+$x_{\max}$, $\theta_{\max}$ & engagement band, heading corridor & 10~mm, $20^\circ$ & same \\
+$\mat Q_y$, $\mat R_u$, $r_w$, $\rho_s$ & weights and slack penalty & $\diag(156,156,1459)$, $\diag(4444,4444,1600)$, 1, $5.8\times10^6$ & $\diag(6944,6944,1459)$, $\diag(1600,1600,400)$, 1, $5.8\times10^6$ \\
+standoff, align, dock & supervisor thresholds & 0.30~m; 10~mm, $1^\circ$; 3~mm, 20~mm/s & same \\
+$\tau$ & wheel-loop time constant in the truth plant & 0.3~s (assumed) & 0.1~s (assumed) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Mecanum kinematics, wheel order FL, FR, RL, RR, rollers at $45^\circ$, $L = l_x + l_y$:
+\begin{equation}
+\vect\omega = \mat J^{-}\vect u,\quad
+\mat J^{-} = \frac{1}{R_w}\begin{bmatrix}1&-1&-L\\ 1&1&L\\ 1&1&-L\\ 1&-1&L\end{bmatrix},\qquad
+\vect u = \mat J^{+}\vect\omega,\quad
+\mat J^{+} = \frac{R_w}{4}\begin{bmatrix}1&1&1&1\\ -1&1&1&-1\\ -\tfrac1L&\tfrac1L&-\tfrac1L&\tfrac1L\end{bmatrix},
+\end{equation}
+with $\mat J^{+}\mat J^{-} = \mat I_3$ and the null space of $\mat J^{+}$ spanned by $[1,1,-1,-1]\T$, the wheel combination that only scrubs the rollers.
+% BODY-END
+
+\end{document}

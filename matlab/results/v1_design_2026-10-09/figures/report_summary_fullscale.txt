@@ -1,0 +1,13 @@
+=== fullscale ===
+Monte Carlo, N = 30, start x in [-2.5,-0.8] m, y in [-0.4,0.4] m, yaw in [-20,20] deg
+  docked 30/30, inside coupler tolerance 30/30, inside internal target 30/30
+  lateral error at dock: rms 3.5 mm, max 9.2 mm (tolerance 80, target 27)
+  yaw error at dock: rms 0.41 deg, max 0.61 deg (tolerance 20, target 1.5)
+  docking time: mean 13.3 s, max 17.9 s; penetration max 8.2 mm; contact speed max 12 mm/s; max yaw 18 deg; fallbacks 0
+Sensitivity (start pose (-2, 0.3, 15 deg), seed 21): columns = lateral mm, yaw deg, dock s, penetration mm, max yaw deg, fallbacks
+  tau [s]      [0.05 3.24 0.0375 14.7 0 15 0;0.1 2.74 0.0377 14.7 0 15 0;0.2 2.87 0.0414 14.7 0 15 0;0.3 2.58 0.26 15.8 0 15 0;0.5 1.23 1.26 19.8 5.58 15 0]
+  delay [s]    [0.01 1.72 0.354 15.7 0 15 0;0.05 2.58 0.26 15.8 0 15 0;0.1 3.34 0.142 15.8 0 15 0;0.2 7.96 0.000333 15.9 0 15 0]
+  noise scale  [1 2.58 0.26 15.8 0 15 0;2 8.75 0.0532 15.8 0 15 0;4 NaN NaN NaN 9.67 15 0]
+  bias scale   [1 2.58 0.26 15.8 0 15 0;2 1.51 0.295 17.4 0 15 0;4 2.32 0.351 29.2 0 15 0]
+Constraints: with -> dock 15.8 s, penetration 0.0 mm, max wheel 4.0 rad/s; without (clipped afterwards) -> dock 14.7 s, penetration 0.0 mm, max wheel 4.0 rad/s
+Estimator: EKF loop -> dock 15.8 s, y -2.6 mm, yaw -0.26 deg; perfect state -> dock 14.6 s, y -0.6 mm, yaw 0.18 deg

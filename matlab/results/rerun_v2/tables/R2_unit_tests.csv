@@ -1,0 +1,2 @@
+jacobian_F_err,jacobian_G_err,chain_J_err,noise_free_pos_mm,noise_free_th_deg,noise_free_v_mms,late_fix_dx,late_fix_dP
+1.397779669787269e-10,3.038735495869416e-11,3.414959426351061e-10,0.010645172225320909,0.003434120991624022,0.12827861318871725,0,0

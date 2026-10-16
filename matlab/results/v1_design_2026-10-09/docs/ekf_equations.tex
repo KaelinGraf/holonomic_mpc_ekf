@@ -1,0 +1,157 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.1cm]{geometry}
+\usepackage{lmodern}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,bm,mathtools}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{microtype}
+\setlength{\parindent}{0pt}\setlength{\parskip}{6pt plus 2pt minus 1pt}
+\allowdisplaybreaks
+
+\newcommand{\vect}[1]{\bm{#1}}
+\newcommand{\mat}[1]{\bm{#1}}
+\newcommand{\T}{^{\mathsf{T}}}
+\newcommand{\Real}{\mathbb{R}}
+\newcommand{\diag}{\operatorname{diag}}
+\DeclareMathOperator{\blkdiag}{blkdiag}
+\newcommand{\Rot}{\mat{R}}
+\newcommand{\hx}{\hat{\vect{x}}}
+
+\title{Docking EKF: equation set}
+\author{}
+\date{8 October 2026}
+
+\begin{document}
+\maketitle
+\vspace{-2em}
+
+\section{State, inputs and timing}
+\begin{equation}
+\vect x = \begin{bmatrix} p_x \\ p_y \\ \theta \\ v_x \\ v_y \end{bmatrix}\in\Real^5,
+\qquad
+\vect u = \begin{bmatrix} a_x \\ a_y \\ r \end{bmatrix}\in\Real^3,
+\qquad
+T = \tfrac{1}{200}\ \text{s}.
+\end{equation}
+$\vect p$ and $\vect v$ are the position and velocity of the chassis centre expressed in the target frame $T$; $\theta$ is the heading of the body $x$-axis relative to the target $x$-axis. $a_x,a_y$ are the gravity-compensated body-frame accelerations and $r$ the yaw rate from the IMU. The filter steps at the IMU period $T$.
+
+\section{Continuous model}
+\begin{equation}
+\dot p_x = v_x,\qquad
+\dot p_y = v_y,\qquad
+\dot\theta = r,\qquad
+\dot v_x = \cos\theta\,a_x - \sin\theta\,a_y,\qquad
+\dot v_y = \sin\theta\,a_x + \cos\theta\,a_y.
+\end{equation}
+
+\section{Discrete map (Euler)}
+\begin{equation}
+\vect x_{k+1} = \vect f_d(\vect x_k,\vect u_k) = \vect x_k + T
+\begin{bmatrix}
+v_x \\ v_y \\ r \\ \cos\theta\,a_x - \sin\theta\,a_y \\ \sin\theta\,a_x + \cos\theta\,a_y
+\end{bmatrix},
+\qquad \theta \text{ wrapped to } [-\pi,\pi).
+\end{equation}
+
+\section{Jacobians of the discrete map}
+Evaluated at the estimate before propagation and at the current IMU sample:
+\begin{equation}
+\mat F_k = \frac{\partial\vect f_d}{\partial\vect x} =
+\begin{bmatrix}
+1 & 0 & 0 & T & 0 \\
+0 & 1 & 0 & 0 & T \\
+0 & 0 & 1 & 0 & 0 \\
+0 & 0 & -T(\sin\theta\,a_x + \cos\theta\,a_y) & 1 & 0 \\
+0 & 0 & \phantom{-}T(\cos\theta\,a_x - \sin\theta\,a_y) & 0 & 1
+\end{bmatrix},
+\qquad
+\mat G_k = \frac{\partial\vect f_d}{\partial\vect u} =
+\begin{bmatrix}
+0 & 0 & 0 \\
+0 & 0 & 0 \\
+0 & 0 & T \\
+T\cos\theta & -T\sin\theta & 0 \\
+T\sin\theta & \phantom{-}T\cos\theta & 0
+\end{bmatrix}.
+\end{equation}
+
+\section{Process noise}
+\begin{gather}
+\mat\Sigma_u = q_{\mathrm{scale}}\,\diag(\sigma_a^2,\sigma_a^2,\sigma_r^2),
+\qquad
+\mat Q_k = \mat G_k\mat\Sigma_u\mat G_k\T + \mat Q_{\mathrm{floor}},\\
+\mat Q_{\mathrm{floor}} = \diag\!\big(\epsilon,\ \epsilon,\ q_\theta,\ q_v,\ q_v\big).
+\end{gather}
+$\sigma_a,\sigma_r$ are the per-sample IMU white-noise standard deviations, inflated by $q_{\mathrm{scale}}$. $q_v$ and $q_\theta$ are the per-step process-noise variances on velocity and heading: tuning parameters, chosen so that the filter is consistent (time-averaged NEES near 5 with the marker visible). They express how far the velocity and heading predictions may drift from the IMU integration between fixes, whether through residual bias, slip or target motion.
+
+\section{Predictor (every IMU sample)}
+\begin{equation}
+\hx_k^- = \vect f_d(\hx_{k-1},\vect u_k),
+\qquad
+\mat P_k^- = \mat F_k\mat P_{k-1}\mat F_k\T + \mat Q_k.
+\end{equation}
+
+\section{Fiducial measurement (15 Hz, captured at $t_c = t_k - \tau_d$)}
+Pre-transform of the raw solver output, the planar translation $\vect t$ and yaw $\psi$ of the marker in the camera frame, with $\vect m$ the marker position in $T$ and $\vect l_c$ the camera position in the body frame:
+\begin{equation}
+\theta_z = \psi_0 - \psi,
+\qquad
+\vect p_z = \vect m - \Rot(\theta_z)\,(\vect t + \vect l_c).
+\end{equation}
+The pseudo-measurement is then linear in the state:
+\begin{gather}
+\vect z = \begin{bmatrix}\vect p_z \\ \theta_z\end{bmatrix} = \mat H_f\vect x + \vect v,
+\qquad
+\mat H_f = \begin{bmatrix} 1 & 0 & 0 & 0 & 0 \\ 0 & 1 & 0 & 0 & 0 \\ 0 & 0 & 1 & 0 & 0 \end{bmatrix},\\
+\mat R_f = \diag(\sigma_p^2,\sigma_p^2,\sigma_\theta^2),
+\qquad
+\sigma_p = \sigma_{p,0}\sqrt{1 + (d/d_0)^2}\quad\text{with } d \text{ the range to the marker}.
+\end{gather}
+
+\section{Corrector (when the fix becomes available), with delay compensation}
+\begin{align}
+\vect x_{\mathrm{ref}} &= \text{buffer entry at the capture time } t_c \quad(\text{or } \hx_k^- \text{ if compensation is off}), \\
+\vect\nu &= \vect z - \mat H_f\vect x_{\mathrm{ref}}, \qquad \nu_3 \text{ wrapped}, \\
+\mat S &= \mat H_f\mat P_k^-\mat H_f\T + \mat R_f, \\
+\mat K &= \mat P_k^-\mat H_f\T\mat S^{-1}, \\
+\hx_k &= \hx_k^- + \mat K\vect\nu, \qquad \theta \text{ wrapped}, \\
+\mat P_k &= (\mat I - \mat K\mat H_f)\,\mat P_k^-\,(\mat I - \mat K\mat H_f)\T + \mat K\mat R_f\mat K\T \qquad\text{(Joseph form)}.
+\end{align}
+
+\section{Fiducial outlier gate}
+Each fix is accepted only if $\vect\nu\T\mat S^{-1}\vect\nu \le 100$ (about ten standard deviations); otherwise it is discarded and the state and covariance are left unchanged. The threshold is deliberately loose: it rejects a wrong-marker or degenerate pose solve, metres off, but never a plausible fix, so an unmodelled change such as a target starting to move is still absorbed rather than rejected.
+
+RTK position and INS heading are not used by the docking filter. In the navigation filter, which works in the world frame, they are the rows
+$\vect z_W = [\vect p_{\mathrm{gps}};\ \psi_W]$, $\mat H = [\mat I_3\ \ \mat 0_{3\times 2}]$, $\mat R = \diag(\sigma_{\mathrm{rtk}}^2,\sigma_{\mathrm{rtk}}^2,\sigma_\psi^2)$, heading innovation wrapped.
+
+\section{Initialisation}
+First fiducial fix, velocity unknown (deployment form, both variants):
+\begin{equation}
+\hx_0 = \begin{bmatrix}\vect z_f \\ \vect 0\end{bmatrix},
+\qquad
+\mat P_0 = \blkdiag\!\big(\mat R_f,\ \sigma_{v,0}^2\mat I_2\big).
+\end{equation}
+Handover from the navigation estimate (full-scale alternative, needs the target's reported pose):
+\begin{gather}
+\hx_0 = \begin{bmatrix}\Rot(\theta_t)\T(\hat{\vect p}_W - \vect p_{t,W}) \\ \hat\theta_W - \theta_t \\ \Rot(\theta_t)\T\hat{\vect v}_W\end{bmatrix},
+\qquad
+\mat T_m = \blkdiag\!\big(\Rot(\theta_t)\T,\ 1,\ \Rot(\theta_t)\T\big),\\
+\mat P_0 = \mat T_m\mat P_W\mat T_m\T + \blkdiag(\mat P_{\mathrm{tgt}},\mat 0).
+\end{gather}
+
+\section{Schedule, per IMU sample $k$}
+\begin{enumerate}[nosep]
+  \item Predict (Section~6), unless $k = 1$.
+  \item For every fiducial fix with $t_{\mathrm{avail}} \le t_k$ not yet used: if valid, gate (Section~9) and correct (Section~8).
+  \item Store $\hx_k$ in the ring buffer at index $k$, \emph{after} the corrections, so that a later delayed fix sees the best estimate of time $t_k$.
+  \item Log $\hx_k$ and $\diag(\mat P_k)$. With truth available, $\mathrm{NEES}_k = \vect e_k\T\mat P_k^{-1}\vect e_k$ with $\vect e_k = \hx_k - \vect x_k$, heading component wrapped.
+\end{enumerate}
+
+\section*{Two reminders}
+\begin{itemize}[nosep]
+  \item The mean always goes through $\vect f_d$, never through $\mat F\hx + \mat G\vect u$.
+  \item $\mat F_k$ and $\mat G_k$ are the derivatives of whatever $\vect f_d$ is actually implemented. With the second-order map $\vect p_{k+1} = \vect p_k + T\vect v_k + \tfrac{T^2}{2}\Rot(\theta_k)\vect a_k$ instead of Euler, the position rows of $\mat F_k$ gain $\tfrac{T^2}{2}\,\partial(\Rot\vect a)/\partial\theta$ in the heading column and the position rows of $\mat G_k$ gain $\tfrac{T^2}{2}\Rot(\theta_k)$ in the accelerometer columns.
+\end{itemize}
+
+\end{document}
