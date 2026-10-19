@@ -22,7 +22,7 @@ def _central_differences(fun, v, h=1e-6):
 
 @pytest.mark.parametrize('h', [0.005, 1.0 / 150.0])
 def test_jacobians_match_finite_differences(p, h):
-    """F_k and G_k agree with central differences of report eq. 2 to 1e-6 (report Table 2)."""
+    """Check F_k and G_k against central differences of report eq. 2 to 1e-6 (report Table 2)."""
     ekf = Ekf(p)
     F, G = (m.copy() for m in ekf.jacobians(X, U, h))
     assert np.allclose(F, _central_differences(lambda x: ekf.f(x, U, h), X), atol=1e-6)
@@ -30,7 +30,7 @@ def test_jacobians_match_finite_differences(p, h):
 
 
 def test_ring_buffer_lookup_at_before_and_between_stamps():
-    """The lookup returns the latest entry at or before the stamp, and None before the buffer."""
+    """Check the lookup: the latest entry at or before the stamp, and None before the buffer."""
     buf = RingBuffer(depth=4)
     for k in range(6):
         buf.push(0.005 * k, np.full(5, float(k)))
@@ -42,7 +42,7 @@ def test_ring_buffer_lookup_at_before_and_between_stamps():
 
 
 def test_heading_innovation_wraps(p):
-    """A fix at -179 deg against an estimate at +179 deg is a 2 deg innovation, not 358 deg."""
+    """Check that a fix at -179 deg against an estimate at +179 deg is a 2 deg innovation."""
     ekf = Ekf(p)
     R = np.diag([0.004 ** 2, 0.004 ** 2, math.radians(0.5) ** 2])
     ekf.initialise(np.array([0.0, 0.0, math.radians(179.0)]), R, 0.0)
@@ -55,7 +55,7 @@ def test_heading_innovation_wraps(p):
 
 
 def test_advance_follows_each_samples_interval(p):
-    """Streams at 50 Hz with a lost sample, and at the IMU's uneven 150 Hz, match a steady one."""
+    """Check that 50 Hz with a lost sample and an uneven 150 Hz stream match a steady one."""
     R = np.diag([1e-4, 1e-4, 1e-4])
     u = np.array([0.2, 0.0, 0.0])
     ref, slow, uneven = Ekf(p), Ekf(p), Ekf(p)
@@ -78,7 +78,7 @@ def test_advance_follows_each_samples_interval(p):
 
 
 def test_floors_add_the_same_variance_per_second_at_any_step(p):
-    """The floors add the same heading and velocity variance per second at any step size."""
+    """Check that the floors add the same heading and velocity variance per second at any step."""
     p['imu']['sigma_a'] = p['imu']['sigma_r_deg'] = 0.0
     R = np.diag([1e-4, 1e-4, 1e-4])
     at_200, at_150 = Ekf(p), Ekf(p)
@@ -97,7 +97,7 @@ def test_floors_add_the_same_variance_per_second_at_any_step(p):
 
 
 def test_a_late_fix_leaves_the_state_an_on_time_one_would(p):
-    """A fix applied 147 ms after its photo leaves the state an on-time one would."""
+    """Check that a fix applied 147 ms after its photo leaves the state an on-time one would."""
     rng = np.random.default_rng(3)
     R = np.diag([0.004 ** 2, 0.004 ** 2, math.radians(0.5) ** 2])
     on_time, late = Ekf(p), Ekf(p)
@@ -118,7 +118,7 @@ def test_a_late_fix_leaves_the_state_an_on_time_one_would(p):
 
 
 def test_a_re_anchor_keeps_the_turn_made_since_the_photo(p):
-    """Restarting from a 100 ms old fix in a 0.5 rad/s turn replays the gyro since it."""
+    """Check that a restart from a 100 ms old fix in a 0.5 rad/s turn replays the gyro since."""
     R = np.diag([0.004 ** 2, 0.004 ** 2, math.radians(0.5) ** 2])
     ekf = Ekf(p)
     ekf.initialise(np.zeros(3), R, 0.0)
@@ -136,7 +136,7 @@ def test_a_re_anchor_keeps_the_turn_made_since_the_photo(p):
 
 
 def test_a_fix_older_than_one_applied_is_rejected(p):
-    """Replaying from an older fix would undo a newer correction, so it is refused."""
+    """Check that a fix older than one already applied is refused."""
     R = np.diag([1e-4, 1e-4, 1e-4])
     ekf = Ekf(p)
     ekf.initialise(np.zeros(3), R, 0.0)
@@ -148,9 +148,7 @@ def test_a_fix_older_than_one_applied_is_rejected(p):
 
 @pytest.mark.parametrize('delay_s', [0.15, 0.3])
 def test_precise_fixes_with_a_wifi_delay_do_not_oscillate(p, delay_s):
-    """Robot still, sub-millimetre fixes 150 or 300 ms late, as on the robot over WiFi
-    (2026-10-13).
-    """
+    """Check that sub-millimetre fixes 150 or 300 ms late do not oscillate with the robot still."""
     rng = np.random.default_rng(1)
     sa, sr = p['imu']['sigma_a'], math.radians(p['imu']['sigma_r_deg'])
     truth = np.array([-0.238, -0.096, math.radians(38.0)])
@@ -176,7 +174,7 @@ def test_precise_fixes_with_a_wifi_delay_do_not_oscillate(p, delay_s):
 
 
 def test_a_still_robot_keeps_zero_velocity_through_a_late_fix(p):
-    """While stopped every step ends at zero velocity, and a late fix's replay keeps it there."""
+    """Check that a stopped robot stays at zero velocity through a late fix's replay."""
     R = np.diag([1e-6, 1e-6, 1e-6])
     ekf = Ekf(p)
     ekf.initialise(np.zeros(3), R, 0.0)
@@ -191,7 +189,7 @@ def test_a_still_robot_keeps_zero_velocity_through_a_late_fix(p):
 
 
 def test_a_moved_board_moves_the_position_not_the_velocity_while_stopped(p):
-    """Fixes stepping 5 cm while the robot stands: the pose follows, the velocity stays zero."""
+    """Check that fixes stepping 5 cm while the robot stands move the pose, not the velocity."""
     R = np.diag([0.002 ** 2, 0.002 ** 2, math.radians(0.3) ** 2])
     still, free = Ekf(p), Ekf(p)
     for ekf in (still, free):

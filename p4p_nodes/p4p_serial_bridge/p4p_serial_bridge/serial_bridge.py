@@ -58,7 +58,7 @@ BOOT_SETTLE_S = 2.0
 
 
 class SerialBridge(Node):
-    """Pump bytes between the cmd_vel / telemetry topics and the Mega."""
+    """Node that pumps bytes between the cmd_vel / telemetry topics and the Mega."""
 
     def __init__(self) -> None:
         super().__init__('serial_bridge')
@@ -137,8 +137,11 @@ class SerialBridge(Node):
             f'cmd_timeout={self._cmd_timeout} s, auto_arm={self._auto_arm}')
 
     def _rate(self, name: str, minimum: float) -> float:
-        """Read a rate parameter, refusing zero (which would divide) and anything slow enough to be
-        unsafe.
+        """Read a rate parameter, clamping it up to a safe minimum.
+
+        Args:
+            name: Parameter name.
+            minimum: Lowest accepted rate [Hz].
         """
         value = float(self.get_parameter(name).value)
         if value < minimum:
@@ -177,7 +180,11 @@ class SerialBridge(Node):
         self._publish_status()
 
     def _forget_firmware_state(self, why: str) -> None:
-        """Reset everything that a firmware reboot invalidates."""
+        """Reset everything that a firmware reboot invalidates.
+
+        Args:
+            why: What invalidated it, for the log line.
+        """
         self._booted = False
         self._last_flags = None
         self._last_row_time = None
@@ -191,7 +198,11 @@ class SerialBridge(Node):
                 f'automatically)')
 
     def _drop(self, why: str) -> None:
-        """Close the link after an I/O error so the next tick reopens it."""
+        """Close the link after an I/O error so the next tick reopens it.
+
+        Args:
+            why: Description of the error, for the log and the status detail.
+        """
         self.get_logger().error(f'{self._port} lost: {why}')
         try:
             if self._ser is not None:
@@ -204,7 +215,11 @@ class SerialBridge(Node):
         self._publish_status()
 
     def _write(self, data: bytes) -> bool:
-        """Send bytes, dropping the link on failure. True when it went out."""
+        """Send bytes, dropping the link on failure, and return whether they went out.
+
+        Args:
+            data: Bytes to write to the port.
+        """
         if self._ser is None:
             return False
         try:
@@ -285,7 +300,7 @@ class SerialBridge(Node):
         self._have_cmd = True
 
     def _write_tick(self) -> None:
-        """Send the newest command, or zeros if it has gone stale. Never skip."""
+        """Send the newest command, or zeros once it has gone stale, on every tick."""
         if self._ser is None or not self._booted:
             return
         if not self._want_armed or not self._have_cmd:
@@ -327,13 +342,20 @@ class SerialBridge(Node):
         return response
 
     def _age(self, then) -> float:
-        """Seconds since `then`, or -1.0 when it never happened."""
+        """Return the seconds since `then`, or -1.0 when it never happened.
+
+        Args:
+            then: ROS time of the event, or None.
+        """
         if then is None:
             return -1.0
         return (self.get_clock().now() - then).nanoseconds * 1e-9
 
     def _classify(self) -> tuple[int, str]:
-        """Work out the single state that best describes the link right now."""
+        """Work out the single state that best describes the link right now.
+
+        States are checked most-broken first, so the most actionable fact wins.
+        """
         if self._ser is None:
             return DriveStatus.NO_LINK, f'NO_LINK: {self._open_error or "port closed"}'
         if not self._booted:
@@ -372,7 +394,10 @@ class SerialBridge(Node):
             self._state = state
 
     def close(self) -> None:
-        """Disarm the bot and release the port."""
+        """Disarm the bot and release the port.
+
+        Safe to call more than once, and never raises, since the rclpy context may be gone.
+        """
         ser, self._ser = self._ser, None
         if ser is None:
             return
@@ -392,7 +417,12 @@ def _clamp(v: float, limit: float) -> float:
 
 
 def fill_telemetry(msg: DriveTelemetry, tel: protocol.Telemetry) -> None:
-    """Copy a decoded row into a DriveTelemetry, all but its header."""
+    """Copy a decoded row into a DriveTelemetry, all but its header.
+
+    Args:
+        msg: Message to fill in place.
+        tel: Decoded telemetry row.
+    """
     msg.mega_t_ms = tel.t_ms & 0xFFFFFFFF
     msg.heading_rad = tel.heading_rad
     msg.yaw_rate = math.radians(tel.yaw_rate_dps)
@@ -409,7 +439,11 @@ def fill_telemetry(msg: DriveTelemetry, tel: protocol.Telemetry) -> None:
 
 
 def main(args: list[str] | None = None) -> None:
-    """Spin the bridge, disarming the bot on the way out."""
+    """Spin the bridge, disarming the bot on the way out.
+
+    Args:
+        args: Command-line arguments for rclpy.init, or None for sys.argv.
+    """
     rclpy.init(args=args)
     node = SerialBridge()
     try:

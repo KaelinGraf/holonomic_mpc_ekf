@@ -24,7 +24,15 @@ import numpy as np
 
 
 class RingBuffer:
-    """The filter's history over the last buffer_s seconds, keyed by IMU stamp."""
+    """The filter's history over the last buffer_s seconds, keyed by IMU stamp.
+
+    Each slot holds a step's state, covariance, input, length and velocity-reset flag, for replay.
+
+    Args:
+        depth: Number of slots.
+        n: State dimension.
+        m: Input dimension.
+    """
 
     def __init__(self, depth, n=5, m=3):
         self.depth = depth
@@ -37,7 +45,16 @@ class RingBuffer:
         self.head = -1
 
     def push(self, stamp, x, P=None, u=None, h=0.0, zv=False):
-        """Store a step at stamp in the oldest slot."""
+        """Store a step at stamp in the oldest slot.
+
+        Args:
+            stamp: IMU stamp at the end of the step [s].
+            x: State after the step.
+            P: Covariance after the step; None leaves the slot's covariance as it is.
+            u: Input the step held; None leaves the slot's input as it is.
+            h: Step length [s]; 0 where the filter started.
+            zv: Whether the step ended with the velocity reset to zero.
+        """
         self.head = k = (self.head + 1) % self.depth
         self.t[k] = stamp
         self.x[k] = x
@@ -49,7 +66,11 @@ class RingBuffer:
         self.zv[k] = zv
 
     def index_at(self, stamp):
-        """Return the slot of the latest entry with t <= stamp; None before the buffer."""
+        """Return the slot of the latest entry with t <= stamp; None before the buffer.
+
+        Args:
+            stamp: Time to look up [s].
+        """
         i = self.head
         for _ in range(self.depth):
             t = self.t[i]
@@ -59,17 +80,23 @@ class RingBuffer:
         return None
 
     def at(self, stamp):
-        """
-        Return the latest stored state with t <= stamp, or None if stamp predates the buffer.
+        """Return the latest stored state with t <= stamp, or None if stamp predates the buffer.
 
         The row is a view into the buffer: use it before the next push().
+
+        Args:
+            stamp: Time to look up [s].
         """
         i = self.index_at(stamp)
         return None if i is None else self.x[i]
 
 
 class Ekf:
-    """The filter: constants from the parameter file, then initialise, predict, update."""
+    """Docking EKF on the robot's pose and velocity in the target frame.
+
+    Args:
+        p: Parameters from params.load (the imu, fid and ekf sections).
+    """
 
     def __init__(self, p):
         imu, fid, ekf = p['imu'], p['fid'], p['ekf']
@@ -98,16 +125,26 @@ class Ekf:
         self.buffer = RingBuffer(round(2.0 * ekf['buffer_s'] * imu['rate']))
 
     def f(self, x, u, h):
-        """Return the Euler step of report eq. 2 over h from (x, u), without touching the state."""
+        """Return the Euler step of report eq. 2 over h from (x, u), without touching the state.
+
+        Args:
+            x: State [x, y, theta, vx, vy] in the target frame [m, m, rad, m/s, m/s].
+            u: Input [a_x, a_y, r]: body-frame acceleration [m/s^2] and yaw rate [rad/s].
+            h: Step length [s].
+        """
         c, s = math.cos(x[2]), math.sin(x[2])
         ax, ay, r = u
         return x + h * np.array((x[3], x[4], r, c * ax - s * ay, s * ax + c * ay))
 
     def jacobians(self, x, u, h):
-        """
-        Write the step-dependent entries of self.F and self.G at (x, u) for step h; return (F, G).
+        """Write the step-dependent entries of self.F and self.G at (x, u); return (F, G).
 
         Report eq. 3, evaluated at the estimate before the step.
+
+        Args:
+            x: State [x, y, theta, vx, vy] before the step.
+            u: Input [a_x, a_y, r] held over the step.
+            h: Step length [s].
         """
         c, s = math.cos(x[2]), math.sin(x[2])
         ax, ay = u[0], u[1]
@@ -121,7 +158,15 @@ class Ekf:
         return F, G
 
     def initialise(self, z, R, stamp):
-        """Start the filter from the first accepted fix (report Section 2.5)."""
+        """Start the filter from the first accepted fix (report Section 2.5).
+
+        The state starts at [z; 0; 0] with covariance blkdiag(R, sigma_v0^2 I2).
+
+        Args:
+            z: Fix [x, y, theta] in the target frame [m, m, rad].
+            R: Covariance of the fix (3x3).
+            stamp: Capture stamp of the fix [s].
+        """
         self.x[:3] = z
         self.x[3:] = 0.0
         self.P[:] = 0.0
@@ -133,7 +178,13 @@ class Ekf:
         self.initialised = True
 
     def predict(self, u, stamp, stopped=False):
-        """Propagate x and P to stamp in one step and buffer the result (report eq. 4)."""
+        """Propagate x and P to stamp in one step and buffer the result (report eq. 4).
+
+        Args:
+            u: Input [a_x, a_y, r] held over the step.
+            stamp: End of the step [s]; the step runs from the filter's clock.
+            stopped: Whether the robot is known to be still, so the step ends in zero_velocity.
+        """
         h = stamp - self.t
         self._step(u, h)
         if stopped:
@@ -142,7 +193,13 @@ class Ekf:
         self.t = stamp
 
     def zero_velocity(self, h):
-        """End a step of h with the robot still: velocity zero, and the board free to move."""
+        """End a step of h with the robot still: velocity zero, and the board free to move.
+
+        The pose takes a random walk of zupt_q_p and zupt_q_th_deg per root second.
+
+        Args:
+            h: Step length [s].
+        """
         self.x[3:] = 0.0
         self.P[3:, :] = 0.0
         self.P[:, 3:] = 0.0
@@ -152,7 +209,12 @@ class Ekf:
         self.P[2, 2] += self.q_board[2] * h
 
     def _step(self, u, h):
-        """Propagate x and P over one step of h holding u, storing nothing."""
+        """Propagate x and P over one step of h holding u, storing nothing.
+
+        Args:
+            u: Input [a_x, a_y, r] held over the step.
+            h: Step length [s].
+        """
         F, G = self.jacobians(self.x, u, h)
         self.x = self.f(self.x, u, h)
         self.x[2] = wrap_pi(self.x[2])
@@ -160,7 +222,15 @@ class Ekf:
         self.P = 0.5 * (P + P.T)
 
     def advance(self, u, stamp, stopped=False):
-        """Predict over a sample's interval, holding u; return the steps taken."""
+        """Predict over a sample's interval, holding u; return the steps taken.
+
+        The interval is split into round(interval / step_s) equal steps, at least one.
+
+        Args:
+            u: Input [a_x, a_y, r] of the IMU sample.
+            stamp: Stamp of the IMU sample [s].
+            stopped: Whether the robot is still over this interval (see predict).
+        """
         if stamp <= self.t:
             return 0
         t0 = self.t
@@ -176,7 +246,13 @@ class Ekf:
         return steps
 
     def nis(self, z, R, stamp):
-        """Return the NIS a fix would have, without applying it (inf before the buffer)."""
+        """Return the NIS a fix would have, without applying it (inf before the buffer).
+
+        Args:
+            z: Fix [x, y, theta] in the target frame.
+            R: Covariance of the fix (3x3).
+            stamp: Capture stamp of the fix [s].
+        """
         innovation = self._innovation(z, R, stamp)
         if innovation is None:
             return math.inf
@@ -184,7 +260,16 @@ class Ekf:
         return float(nu @ np.linalg.solve(S, nu))
 
     def update(self, z, R, stamp, gate=True):
-        """Correct with a fix captured at stamp; return (accepted, nis) (report eqs. 7-8)."""
+        """Correct with a fix captured at stamp; return (accepted, nis) (report eqs. 7-8).
+
+        The filter corrects at the buffered step of the capture stamp and replays the steps since.
+
+        Args:
+            z: Fix [x, y, theta] in the target frame.
+            R: Covariance of the fix (3x3).
+            stamp: Capture stamp of the fix [s].
+            gate: Whether to apply the NIS gate.
+        """
         b = self.buffer
         k = b.index_at(stamp)
         if k is None or stamp < self.last_fix:
@@ -205,7 +290,13 @@ class Ekf:
         return True, nis
 
     def reanchor(self, z, R, stamp):
-        """Restart the filter from a fix at its photo time, then replay the steps since."""
+        """Restart the filter from a fix at its photo time, then replay the steps since.
+
+        Args:
+            z: Fix [x, y, theta] in the target frame.
+            R: Covariance of the fix (3x3).
+            stamp: Capture stamp of the fix [s]; before the buffer, the filter initialises there.
+        """
         k = self.buffer.index_at(stamp)
         if k is None:
             self.initialise(z, R, stamp)
@@ -219,7 +310,11 @@ class Ekf:
         self.last_fix = stamp
 
     def _replay_from(self, k):
-        """Store the current state in slot k, then replay the stored steps after it to now."""
+        """Store the current state in slot k, then replay the stored steps after it to now.
+
+        Args:
+            k: Buffer slot to replay from.
+        """
         b = self.buffer
         b.x[k], b.P[k] = self.x, self.P
         while k != b.head:
@@ -234,7 +329,13 @@ class Ekf:
         return None if k is None else self._innovation_at(k, z, R)
 
     def _innovation_at(self, k, z, R):
-        """Innovation and its covariance against buffer slot k, with that step's own P."""
+        """Return the innovation and its covariance against buffer slot k, with that step's own P.
+
+        Args:
+            k: Buffer slot of the fix's capture stamp.
+            z: Fix [x, y, theta] in the target frame.
+            R: Covariance of the fix (3x3).
+        """
         nu = z - self.buffer.x[k, :3]
         nu[2] = wrap_pi(nu[2])
         return nu, self.buffer.P[k, :3, :3] + R

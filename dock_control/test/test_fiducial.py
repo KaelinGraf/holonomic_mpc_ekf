@@ -16,10 +16,12 @@ R_UPRIGHT = np.array([[0.0, 0.0, -1.0],
 
 
 def _board_in_camera(chain, pose, spin=0.0):
-    """
-    Return T_OM, the board pose the pipeline reports with the robot at (x, y, theta).
+    """Return T_OM, the board pose the pipeline reports with the robot at (x, y, theta).
 
-    spin turns the board about its own normal (its z), about its centre.
+    Args:
+        chain: The FiducialChain whose constants place the board.
+        pose: Robot pose (x, y, theta) in the target frame [m, m, rad].
+        spin: Turn of the board about its own normal, through its centre [rad].
     """
     x, y, theta = pose
     R = R_UPRIGHT @ rot_z(spin)
@@ -28,7 +30,11 @@ def _board_in_camera(chain, pose, spin=0.0):
 
 
 def _rotvec(phi):
-    """Return the rotation matrix of a rotation vector (Rodrigues)."""
+    """Return the rotation matrix of a rotation vector (Rodrigues).
+
+    Args:
+        phi: Rotation vector [rad].
+    """
     angle = np.linalg.norm(phi)
     if angle == 0.0:
         return np.eye(3)
@@ -42,7 +48,7 @@ def _rotvec(phi):
                                         ((-0.5, 0.0, 0.0), 0.0),
                                         ((-1.2, -0.2, math.radians(-25.0)), 0.1)])
 def test_measurement_jacobian_matches_finite_differences(p, pose, tilt):
-    """The Jacobian of linearise agrees with central differences of the chain, level or tilted."""
+    """Check linearise's Jacobian against central differences of the chain, level or tilted."""
     chain = FiducialChain(p)
     T_OM = _board_in_camera(chain, pose, spin=0.7)
     R0 = _rotvec(np.array([tilt, -0.5 * tilt, 0.0])) @ T_OM[:3, :3]
@@ -63,7 +69,7 @@ def test_measurement_jacobian_matches_finite_differences(p, pose, tilt):
 
 
 def test_pose_covariance_reaches_z_through_the_chain(p):
-    """Square on, the camera's depth noise becomes z's x noise and its sideways noise z's y."""
+    """Check that, square on, depth noise becomes z's x noise and sideways noise z's y noise."""
     p['fid'].pop('sigma_th_floor_deg', None)
     chain = FiducialChain(p)
     T_OM = _board_in_camera(chain, (-0.5, 0.0, 0.0))
@@ -76,7 +82,7 @@ def test_pose_covariance_reaches_z_through_the_chain(p):
 
 
 def test_optical_axes(p):
-    """Optical z looks forward, image right is the robot's right, and image down is down."""
+    """Check the optical axes: z looks forward, x to the robot's right and y down."""
     R_BO = se3_inv(FiducialChain(p).T_OB)[:3, :3]
     assert np.allclose(R_BO @ [0.0, 0.0, 1.0], [1.0, 0.0, 0.0])
     assert np.allclose(R_BO @ [1.0, 0.0, 0.0], [0.0, -1.0, 0.0])
@@ -84,7 +90,7 @@ def test_optical_axes(p):
 
 
 def test_board_seen_square_on_is_the_identity(p):
-    """Facing the board squarely gives R = I, as OpenCV reports a board facing the camera."""
+    """Check that facing the board squarely gives R = I, as OpenCV reports a board facing it."""
     p['geom']['marker_psi0_deg'] = 180.0
     T_OM = _board_in_camera(FiducialChain(p), (-0.5, 0.0, 0.0))
     assert np.allclose(T_OM[:3, :3], np.eye(3))
@@ -92,7 +98,7 @@ def test_board_seen_square_on_is_the_identity(p):
 
 @pytest.mark.parametrize('pose', FOUR_POSES)
 def test_chain_recovers_the_four_poses(p, pose):
-    """The chain inverts a known robot pose; level and upright, so roll and pitch are zero."""
+    """Check that the chain inverts a known robot pose, with zero roll and pitch when level."""
     chain = FiducialChain(p)
     T_OM = _board_in_camera(chain, pose)
     out = chain.chain(T_OM[:3, :3], T_OM[:3, 3])
@@ -103,7 +109,7 @@ def test_chain_recovers_the_four_poses(p, pose):
 @pytest.mark.parametrize('spin_deg', [0.0, 37.0, 90.0, 180.0, 270.0, -123.0])
 @pytest.mark.parametrize('pose', FOUR_POSES + [(-1.5, 0.25, math.radians(-30.0))])
 def test_the_boards_rotation_about_its_own_normal_is_normalised_out(p, pose, spin_deg):
-    """A board turned in its own plane, about its centre, by any angle gives the same pose."""
+    """Check that a board turned in its own plane by any angle gives the same pose."""
     chain = FiducialChain(p)
     T_OM = _board_in_camera(chain, pose, math.radians(spin_deg))
     x, y, theta, roll, pitch = chain.chain(T_OM[:3, :3], T_OM[:3, 3])
@@ -113,13 +119,19 @@ def test_the_boards_rotation_about_its_own_normal_is_normalised_out(p, pose, spi
 
 
 def _seen(chain, ahead, right):
-    """Return the board pose with its centre `ahead` of the lens and `right` of it, upright."""
+    """Return the board pose with its centre `ahead` of the lens and `right` of it, upright.
+
+    Args:
+        chain: The FiducialChain whose board centre is placed.
+        ahead: Distance of the board centre ahead of the lens [m].
+        right: Distance of the board centre to the right of the lens [m].
+    """
     c = np.array((right, 0.0, ahead))
     return np.eye(3), c - chain.c_M
 
 
 def test_signs_by_hand(p):
-    """Board poses written down by hand, not through the chain's own constants."""
+    """Check the chain's signs on board poses written down by hand."""
     p['geom']['marker_m'][1] = 0.0
     p['geom']['marker_psi0_deg'] = 180.0
     chain = FiducialChain(p)
@@ -138,7 +150,7 @@ def test_signs_by_hand(p):
 
 
 def test_a_target_offset_sideways_moves_the_robot_the_other_way(p):
-    """With the board 1 cm left of the target, a robot on its centre line is at y = +1 cm."""
+    """Check that a board 1 cm left of the target puts a robot on its centre line at y = +1 cm."""
     p['geom']['marker_m'][1] = 0.010
     p['geom']['marker_psi0_deg'] = 180.0
     chain = FiducialChain(p)
@@ -148,7 +160,7 @@ def test_a_target_offset_sideways_moves_the_robot_the_other_way(p):
 
 
 def test_a_fix_is_never_surer_of_its_heading_than_the_floor(p):
-    """The pipeline's heading variance is raised to sigma_th_floor_deg^2, a larger one is kept."""
+    """Check that the heading variance is raised to sigma_th_floor_deg^2 and a larger one kept."""
     p['geom']['marker_psi0_deg'] = 180.0
     chain = FiducialChain(p)
     T_OM = _board_in_camera(chain, (-0.5, 0.0, 0.0))

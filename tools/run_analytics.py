@@ -87,7 +87,11 @@ STAGE_WASH = {ACQUIRE: '#f0efec', APPROACH: '#e6e5e0', FINAL: '#d9d8d1', HOLD: S
 
 
 def nz(t: float) -> datetime:
-    """Return the epoch time t in New Zealand time (NZDT in October)."""
+    """Return the epoch time t in New Zealand time, which is NZDT in October.
+
+    Args:
+        t: Epoch time, in seconds.
+    """
     from zoneinfo import ZoneInfo
     return datetime.fromtimestamp(t, ZoneInfo('Pacific/Auckland'))
 
@@ -97,7 +101,12 @@ def utc(t: float) -> datetime:
 
 
 def fin(v, nd: int = 4):
-    """A JSON-safe float: rounded, None for NaN or inf."""
+    """Return v as a JSON-safe float: rounded, and None for NaN, inf or a non-number.
+
+    Args:
+        v: Value to convert.
+        nd: Decimal places to round to.
+    """
     if v is None:
         return None
     try:
@@ -124,7 +133,14 @@ def wrap(a):
 
 
 def fmt(v, spec: str = '.3f', unit: str = '', none: str = 'n/a') -> str:
-    """Format a number for prose; 'n/a' for missing."""
+    """Format a number for prose, with a placeholder when it is missing.
+
+    Args:
+        v: Number, or None.
+        spec: Format spec.
+        unit: Text appended to the number.
+        none: Text returned for a missing number.
+    """
     if v is None or (isinstance(v, float) and not math.isfinite(v)):
         return none
     return f'{v:{spec}}{unit}'
@@ -155,7 +171,30 @@ def git(repo: Path, *args: str) -> str:
 
 @dataclass
 class Bag:
-    """Everything the analysis reads from one bag, as arrays in the Pi's clock [s]."""
+    """Everything the analysis reads from one bag, as arrays in the Pi's clock [s].
+
+    Args:
+        name: Name of the bag folder.
+        path: Bag folder.
+        start: Receive time of the first message.
+        end: Receive time of the last message.
+        closed: Whether metadata.yaml is present, so the recorder closed the bag.
+        counts: Message count of each topic.
+        stage: dock/stage rows: t_recv, stage, y_ref (x, y, th), v_max, r_max, enabled.
+        est: dock/estimate rows: stamps, x(5), p_diag(5), r_gyro, imu_rate, fix_age, nis, accepted.
+        mpc: dock/mpc_info rows: t_recv, t_stamp, u(3), slack, exit_flag, solve_ms, fallback.
+        y_pred: Predicted outputs of each MPC tick.
+        fix: fiducial/fix rows: stamps, pose, covariance, latency, roll, pitch, range, ambiguous.
+        inf: inference_result rows: stamps, valid, ambiguous, rms, num_used, t(3), q(4), rms_alt.
+        reasons: Failure reason of each inference result, empty when it solved.
+        cmd: cmd_vel rows: t_recv, u_b, v_b, r_b.
+        tel: drive/telemetry rows: stamps, applied and requested twists, flags, pulses, yaw rate.
+        status: drive/status rows: t_recv, t_stamp, state, cmd_age.
+        imu: imu/data rows: t_recv, t_stamp, ax, ay, az, gx, gy, gz.
+        image: Receive time of each camera frame, not decoded.
+        rosout: (t_recv, node, level, text) of each rosout message.
+        tf_static: Static transforms, as child -> (parent, (x, y, z)).
+    """
 
     name: str
     path: Path
@@ -186,7 +225,11 @@ SUFFIX = {'dock/stage': 'stage', 'dock/estimate': 'est', 'dock/mpc_info': 'mpc',
 
 
 def bag_storage(path: Path):
-    """Return (uri, storage_id, closed) for a bag folder, or None if it is not one."""
+    """Return (uri, storage_id, closed) for a bag folder, or None if it is not one.
+
+    Args:
+        path: Folder to inspect.
+    """
     if (path / 'metadata.yaml').exists():
         return str(path), '', True
     for ext, sid in (('*.mcap', 'mcap'), ('*.db3', 'sqlite3')):
@@ -197,7 +240,11 @@ def bag_storage(path: Path):
 
 
 def bag_fingerprint(path: Path) -> dict:
-    """The bag folder's files and sizes: a bag copied while still recording changes it when copied again."""
+    """Return the size of each file in the bag folder, which grows if it is copied mid-recording.
+
+    Args:
+        path: Bag folder.
+    """
     return {f.name: f.stat().st_size for f in sorted(path.iterdir()) if f.is_file()}
 
 
@@ -212,8 +259,12 @@ def _stamp(m) -> float:
 
 
 def old_telemetry(data: bytes):
-    """Decode a DriveTelemetry of the layout before 876cd4a (2026-10-13 18:02 NZDT): no requested,
-    no pulse_us.
+    """Decode a DriveTelemetry in the legacy layout, which has no requested or pulse_us fields.
+
+    The row has NaN for requested and 0 for the pulses; bytes that do not fit give None.
+
+    Args:
+        data: Serialised CDR message, with its 4-byte encapsulation header.
     """
     import struct
     buf = bytes(data)[4:]
@@ -363,7 +414,12 @@ class Timeline:
 
 
 def stage_at(b: Bag, t: np.ndarray) -> np.ndarray:
-    """The stage published last at or before each time (IDLE before the first)."""
+    """Return the stage published last at or before each time, IDLE before the first.
+
+    Args:
+        b: Bag of the run.
+        t: Times, in seconds.
+    """
     if not len(b.stage):
         return np.zeros(len(np.atleast_1d(t)), int)
     i = np.searchsorted(b.stage[:, 0], np.atleast_1d(t), side='right') - 1
@@ -404,7 +460,15 @@ def timeline(b: Bag) -> Timeline:
 
 
 def abort_cause(b: Bag, segs: list, cfg: dict) -> str:
-    """Which of the supervisor's abort rules fired: HOLD timeout, drive, stale estimate, variance, or the old corridor."""
+    """Return which of the supervisor's abort rules fired, from the bag around the abort.
+
+    The rules are the HOLD timeout, drive, stale estimate, variance and heading corridor.
+
+    Args:
+        b: Bag of the run.
+        segs: Timeline segments (stage, t_start, t_end).
+        cfg: Deployed configuration of the run, from deployed_config.
+    """
     i = next(k for k, s in enumerate(segs) if s[0] == ABORT)
     t = segs[i][1]
     prev = segs[i - 1] if i else None
@@ -455,10 +519,12 @@ def config_at(sha: str) -> dict:
 
 @functools.lru_cache(maxsize=None)
 def cap_type(sha: str) -> str:
-    """The speed cap's shape at sha: 'L1' (|u_b| + |v_b| <= v_max, the brief's), 'per-axis' (|u_b|,
-    |v_b| <= v_max each; 3c397a6), 'per-axis in APPROACH, L1 in FINAL and HOLD' (the supervisor
-    picks per stage; ef5e42e), or, from 903e6be, per axis in FINAL too with the lateral capped
-    at lim.v_lat_final (FINAL's straight-in caps).
+    """Return the shape of the speed cap at sha, per stage.
+
+    Shapes: L1 (|u_b| + |v_b| <= v_max), per axis (each <= v_max), or a mix chosen by stage.
+
+    Args:
+        sha: Controller commit.
     """
     sup = git(CONTROLLER, 'show', f'{sha}:dock_control/dock_control/supervisor.py')
     if 'v_lat_final' in sup:
@@ -471,13 +537,21 @@ def cap_type(sha: str) -> str:
 
 @functools.lru_cache(maxsize=None)
 def corridor_abort(sha: str) -> bool:
-    """Whether that commit's supervisor aborts on the heading corridor (before 1cfa8f2)."""
+    """Return whether the supervisor at sha aborts on the heading corridor.
+
+    Args:
+        sha: Controller commit.
+    """
     return 'off_corridor_since' in git(CONTROLLER, 'show', f'{sha}:dock_control/dock_control/supervisor.py')
 
 
 @functools.lru_cache(maxsize=None)
 def code_dir(sha: str) -> str:
-    """Write dock_control as it was at sha into a temporary folder; return the folder."""
+    """Write dock_control at commit sha into a temporary folder and return the folder.
+
+    Args:
+        sha: Controller commit.
+    """
     root = Path(tempfile.gettempdir()) / 'run_analytics_code' / sha[:12]
     pkg = root / 'dock_control'
     if not (pkg / '.complete').exists():
@@ -490,7 +564,11 @@ def code_dir(sha: str) -> str:
 
 
 def observed_settings(b: Bag) -> dict:
-    """The settings a bag shows by itself: the APPROACH reference and caps, FINAL's floor, the horizon, the TFs."""
+    """Return the settings the bag shows by itself: APPROACH caps, FINAL floor, horizon and TFs.
+
+    Args:
+        b: Bag of the run.
+    """
     o = {}
     st = b.stage
     app = st[st[:, 1] == APPROACH] if len(st) else st
@@ -513,7 +591,11 @@ def observed_settings(b: Bag) -> dict:
 
 
 def expected_settings(p: dict) -> dict:
-    """The same quantities as observed_settings, as a config file sets them."""
+    """Return the quantities observed_settings reads, as a config file sets them.
+
+    Args:
+        p: dock_control parameters.
+    """
     return {'standoff_m': p['sup']['standoff'], 'v_approach': p['lim']['v_approach'], 'r_max': p['lim']['r_max'],
             'v_final': p['lim']['v_final'], 'Np': p['mpc']['Np'], 'marker_x_m': p['geom']['marker_m'][0],
             'cam_x_m': p['geom']['cam_xyz'][0]}
@@ -540,7 +622,11 @@ def key_settings(p: dict, sha: str) -> dict:
 
 
 def pre_tuning(p: dict) -> dict:
-    """p with the MPC weights from before the robot tuning (7c item 47): rw 1, lateral weight from tol.y."""
+    """Return p with the untuned MPC weights: rw 1, the lateral weight from tol.y and no qw.
+
+    Args:
+        p: dock_control parameters.
+    """
     q = json.loads(json.dumps(p))
     q['mpc']['rw'] = 1.0
     q['mpc']['Qy'] = [q['tol']['y'] ** -2, q['tol']['y'] ** -2, q['mpc']['Qy'][2]]
@@ -562,7 +648,12 @@ def run_worker(mode_: str, sha: str, req: dict, timeout: float = 600.0) -> dict 
 
 
 def replay_ticks(b: Bag, n_max: int = 160) -> list:
-    """Logged MPC ticks with everything their solve read, for run_analytics_sim.replay (evenly sampled)."""
+    """Return logged MPC ticks with everything their solve read, for the replay worker.
+
+    Args:
+        b: Bag of the run.
+        n_max: Most ticks to return, sampled evenly.
+    """
     if not len(b.mpc) or not len(b.est):
         return []
     est_by_stamp = {round(s, 6): i for i, s in enumerate(b.est[:, 1])}
@@ -592,7 +683,13 @@ def replay_ticks(b: Bag, n_max: int = 160) -> list:
 
 
 def deployed_config(b: Bag, tl: Timeline, replay: bool = True) -> dict:
-    """Match the run to the controller commit that ran, by time, by the bag's own settings and by replay."""
+    """Match the run to the controller commit that ran, by time, by its settings and by replay.
+
+    Args:
+        b: Bag of the run.
+        tl: Timeline of the run.
+        replay: Replay logged MPC ticks through each candidate commit.
+    """
     t = tl.t0
     commits = controller_commits()
     before = [c for c in commits if c.t <= t]
@@ -666,7 +763,7 @@ def deployed_config(b: Bag, tl: Timeline, replay: bool = True) -> dict:
 
 @functools.lru_cache(maxsize=None)
 def detector_history() -> tuple:
-    """(commit time, short, detector file, square_m, fx) for each cfg/cfg.yaml commit, oldest first."""
+    """Return (time, short sha, detector, square_m, fx) of each cfg.yaml commit, oldest first."""
     import yaml
     out = git(WIRELESS, 'log', '--format=%H%x09%h%x09%ct', '--', 'cfg/cfg.yaml')
     rows = []
@@ -718,14 +815,25 @@ def deployed_detector(t: float, live: dict | None = None, name: str = '') -> dic
 
 
 def board_square(t: float) -> float:
-    """The board's square at time t: cfg.yaml's BOARD.square_length_m; 24 mm before it was committed."""
+    """Return the board's square length in m at time t, from cfg.yaml, else 0.024.
+
+    Args:
+        t: Epoch time, in seconds.
+    """
     cur = [h for h in detector_history() if h[0] <= t]
     sq = cur[-1][3] if cur else None
     return float(sq) if sq else 0.024
 
 
 def held(t_cmd: np.ndarray, v: np.ndarray, t: np.ndarray, timeout: float = 0.1) -> np.ndarray:
-    """The command in force at each t: the last one received within timeout (the bridge's cmd_timeout), else 0."""
+    """Return the command in force at each t: the last one received within timeout, else 0.
+
+    Args:
+        t_cmd: Receive time of each command, in seconds.
+        v: Commands, one row per receive time.
+        t: Times to evaluate at, in seconds.
+        timeout: Age at which a command lapses, in seconds, as the bridge's cmd_timeout.
+    """
     if not len(t_cmd):
         return np.zeros((len(t),) + v.shape[1:])
     i = np.searchsorted(t_cmd, t, side='right') - 1
@@ -736,7 +844,15 @@ def held(t_cmd: np.ndarray, v: np.ndarray, t: np.ndarray, timeout: float = 0.1) 
 
 
 def window_fit(t: np.ndarray, y: np.ndarray, tg: np.ndarray, half: float, min_n: int = 4):
-    """Slope and value of a straight line through (t, y) within +-half of each tg; NaN where too few points."""
+    """Return slope and value of a line fit to (t, y) within +-half of each tg; NaN if sparse.
+
+    Args:
+        t: Sample times, ascending, in seconds.
+        y: Samples, one row per time.
+        tg: Times to fit at, in seconds.
+        half: Half-width of each window, in seconds.
+        min_n: Fewest samples a window needs.
+    """
     i0 = np.searchsorted(t, tg - half)
     i1 = np.searchsorted(t, tg + half, side='right')
     slope = np.full((len(tg),) + y.shape[1:], np.nan)
@@ -756,9 +872,17 @@ def window_fit(t: np.ndarray, y: np.ndarray, tg: np.ndarray, half: float, min_n:
 
 
 def camera_track(b: Bag, t_lo: float, t_hi: float, dt: float = 0.05, half: float = 0.2, ambiguous: bool = False):
-    """The robot's motion from the camera alone, on a grid: velocity in the target frame, in the
-    body frame, and the heading, from straight-line fits of the fixes over 2 x half
-    (mpc_analysis vel_truth.py).
+    """Return the robot's motion from the camera alone on a time grid, from line fits of the fixes.
+
+    The track holds the velocity in the target and body frames, and the heading.
+
+    Args:
+        b: Bag of the run.
+        t_lo: Start of the grid, in seconds.
+        t_hi: End of the grid, in seconds.
+        dt: Grid step, in seconds.
+        half: Half-width of each fit window, in seconds.
+        ambiguous: Use every fix, ambiguous ones included.
     """
     f = b.fix
     keep = (((f[:, 19] == 0) | ambiguous) & (f[:, 1] >= t_lo - 1.0) & (f[:, 1] <= t_hi + 1.0)) if len(f) \
@@ -780,10 +904,15 @@ def camera_track(b: Bag, t_lo: float, t_hi: float, dt: float = 0.05, half: float
 
 def fit_lag_gain(t: np.ndarray, src_t: np.ndarray, src: np.ndarray, out: np.ndarray, max_lag: float = 0.6,
                  min_range: float = 0.02) -> dict:
-    """
-    out(t) ~ gain * src(t - lag) + offset, the lag searched in 10 ms steps; least squares at each lag.
+    """Fit out(t) ~ gain * src(t - lag) + offset, searching the lag in 10 ms steps.
 
-    Returns gain, lag, offset, the residual RMS, the samples and the source's 95th-percentile magnitude.
+    Args:
+        t: Times of out, in seconds.
+        src_t: Times of src, in seconds.
+        src: Source signal, such as a command.
+        out: Response at t.
+        max_lag: Longest lag searched, in seconds.
+        min_range: Smallest 95th-percentile source magnitude that counts as motion.
     """
     ok = np.isfinite(out)
     res = {'gain': math.nan, 'lag_s': math.nan, 'offset': math.nan, 'resid_rms': math.nan, 'n': int(ok.sum()),
@@ -863,7 +992,12 @@ def analyse_imu(b: Bag, tl: Timeline) -> dict:
 
 
 def analyse_fixes(b: Bag, tl: Timeline) -> dict:
-    """Fix and pose statistics: rate, latency, ambiguity, RMS and corners against range, jitter when still."""
+    """Return fix statistics: rate, latency, ambiguity, RMS and corners by range, still jitter.
+
+    Args:
+        b: Bag of the run.
+        tl: Timeline of the run.
+    """
     m = {'inference_results': int(len(b.inf)), 'fixes': int(len(b.fix)), 'images': int(len(b.image))}
     if len(b.inf):
         inf = b.inf
@@ -917,7 +1051,14 @@ def analyse_fixes(b: Bag, tl: Timeline) -> dict:
 
 
 def still_spells(b: Bag, min_s: float = 1.0) -> list:
-    """(t0, t1) where the robot was still: no moving command for 0.5 s before, and the gyro below 0.02 rad/s."""
+    """Return (t0, t1) of the spells when the robot is still, judged by the command and the gyro.
+
+    Still means no moving command for 0.5 s before, and the gyro below 0.02 rad/s.
+
+    Args:
+        b: Bag of the run.
+        min_s: Shortest spell that counts, in seconds.
+    """
     if not len(b.fix):
         return []
     t_lo, t_hi = b.fix[0, 1], b.fix[-1, 1]
@@ -950,7 +1091,12 @@ def still_spells(b: Bag, min_s: float = 1.0) -> list:
 
 
 def still_jitter(b: Bag, win: float = 1.0) -> list:
-    """Per 1 s window of a still spell: the unambiguous fixes' sd about a straight line, and the fixes' own R."""
+    """Return, per window of a still spell, the fixes' sd about a line and their own R.
+
+    Args:
+        b: Bag of the run.
+        win: Window length, in seconds.
+    """
     out = []
     f = b.fix
     for a, c in still_spells(b):
@@ -974,8 +1120,12 @@ def still_jitter(b: Bag, win: float = 1.0) -> list:
 
 
 def processed_fixes(b: Bag) -> np.ndarray:
-    """One row per fix the EKF processed: t_recv, nis, accepted, stage, ambiguous, range,
-    t_capture.
+    """Return one row per fix the EKF processed, matched to the fiducial/fix it came from.
+
+    The columns are t_recv, nis, accepted, stage, ambiguous, range and t_capture.
+
+    Args:
+        b: Bag of the run.
     """
     e = b.est
     if not len(e):
@@ -995,7 +1145,13 @@ def processed_fixes(b: Bag) -> np.ndarray:
 
 
 def ekf_velocity(b: Bag, tl: Timeline, cam: dict) -> dict:
-    """The EKF's velocity against a camera track over APPROACH to the end of commanding: RMS, slope, lag."""
+    """Compare the EKF's velocity with a camera track from APPROACH to the end of commanding.
+
+    Args:
+        b: Bag of the run.
+        tl: Timeline of the run.
+        cam: Camera track from camera_track.
+    """
     e = b.est[np.argsort(b.est[:, 1])]
     t = cam['t']
     mv = (t >= tl.approach) & (t <= tl.t_cmd)
@@ -1012,7 +1168,14 @@ def ekf_velocity(b: Bag, tl: Timeline, cam: dict) -> dict:
 
 
 def analyse_ekf(b: Bag, tl: Timeline, cam: dict | None, gate: float) -> tuple[dict, dict]:
-    """The estimate against the camera-only track: residuals, velocity, NIS, re-anchors, consistency."""
+    """Compare the estimate with the camera-only track: residuals, velocity, NIS, re-anchors.
+
+    Args:
+        b: Bag of the run.
+        tl: Timeline of the run.
+        cam: Camera track from camera_track, or None.
+        gate: NIS gate the EKF applies to fixes.
+    """
     m, d = {}, {}
     e = b.est
     if not len(e):
@@ -1090,7 +1253,13 @@ def analyse_ekf(b: Bag, tl: Timeline, cam: dict | None, gate: float) -> tuple[di
 
 
 def analyse_mpc(b: Bag, tl: Timeline, cfg: dict) -> tuple[dict, dict]:
-    """Solve times, fallbacks, slack, which limit is active, smoothness, plan pointing, stage times."""
+    """Return MPC statistics: solve times, fallbacks, slack, active limits and smoothness.
+
+    Args:
+        b: Bag of the run.
+        tl: Timeline of the run.
+        cfg: Deployed configuration of the run, from deployed_config.
+    """
     m, d = {}, {}
     if not len(b.mpc):
         return {'ticks': 0}, d
@@ -1175,7 +1344,13 @@ def analyse_mpc(b: Bag, tl: Timeline, cfg: dict) -> tuple[dict, dict]:
 
 
 def stage_metrics(b: Bag, tl: Timeline, cam: dict | None) -> dict:
-    """Time in each stage, time to dock, overshoot and final error (from the camera where it can)."""
+    """Return the time in each stage, the time to dock, the overshoot and the final error.
+
+    Args:
+        b: Bag of the run.
+        tl: Timeline of the run.
+        cam: Camera track from camera_track, or None.
+    """
     m = {'outcome': tl.outcome}
     if not tl.armed:
         return m
@@ -1197,7 +1372,18 @@ def stage_metrics(b: Bag, tl: Timeline, cam: dict | None) -> dict:
 
 
 def motion_metrics(t, x, y, th, t_app, t_end, fix=None, est=None) -> dict:
-    """Start pose, lateral overshoot and final error of a track (real: camera; simulated: true pose)."""
+    """Return the start pose, lateral overshoot and final error of a camera or simulated track.
+
+    Args:
+        t: Track times, in seconds.
+        x: Track x in the target frame, in m.
+        y: Track y in the target frame, in m.
+        th: Track heading, in rad.
+        t_app: Time APPROACH starts, in seconds.
+        t_end: Time commanding ends, in seconds.
+        fix: Fix rows, preferred for the start and final pose, or None.
+        est: Estimate rows, the fallback for the start pose, or None.
+    """
     m = {}
     k0 = np.nonzero((t >= t_app - 0.6) & (t <= t_app) & np.isfinite(y))[0]
     start, src = None, ''
@@ -1239,7 +1425,13 @@ def motion_metrics(t, x, y, th, t_app, t_end, fix=None, est=None) -> dict:
 
 
 def analyse_drive(b: Bag, tl: Timeline, cam: dict | None) -> tuple[dict, dict]:
-    """Commanded body velocity against what the camera (and the gyro) saw: gain and lag per axis."""
+    """Compare the commanded body velocity with what the camera and the gyro saw, per axis.
+
+    Args:
+        b: Bag of the run.
+        tl: Timeline of the run.
+        cam: Camera track from camera_track, or None.
+    """
     m, d = {}, {}
     if cam is None or not len(b.cmd) or not math.isfinite(tl.approach):
         return m, d
@@ -1282,7 +1474,11 @@ def analyse_drive(b: Bag, tl: Timeline, cam: dict | None) -> tuple[dict, dict]:
 
 
 def analyse_drivecal(b: Bag) -> dict:
-    """A drive calibration run: drive_calibration_fit.py's per-axis deadband and gain."""
+    """Fit a drive calibration run's per-axis deadband and gain with drive_calibration_fit.py.
+
+    Args:
+        b: Bag of the run.
+    """
     sys.path.insert(0, str(TOOLS))
     import drive_calibration_fit as dcf
     d = {'cmd': b.cmd, 'fix': np.c_[b.fix[:, 1], b.fix[:, 2:5], b.fix[:, 19], b.fix[:, 18]] if len(b.fix) else
@@ -1306,7 +1502,11 @@ def analyse_drivecal(b: Bag) -> dict:
 
 
 def drive_model(drive: dict) -> tuple:
-    """(gain, lag, notes) per axis for the simulation, defaults where the run could not measure an axis."""
+    """Return (gain, lag, notes) per axis for the simulation, with defaults for unmeasured axes.
+
+    Args:
+        drive: Drive metrics of the run, from analyse_drive.
+    """
     gains, lags, notes = [], [], []
     for name, g0 in (('forward', 1.0), ('lateral', 1.0), ('turn', 1.0)):
         a = (drive.get('axes') or {}).get(name) or {}
@@ -1389,7 +1589,14 @@ def times(n: int) -> str:
 
 
 def sim_verdicts(real: dict, sim: dict, ekf: dict, mpcm: dict) -> list:
-    """Plain statements of where the simulation does and does not reproduce the run."""
+    """Return plain statements of where the simulation does and does not reproduce the run.
+
+    Args:
+        real: Run metrics of the robot, from stage_metrics.
+        sim: Metrics of the simulation.
+        ekf: EKF metrics of the run.
+        mpcm: MPC metrics of the run.
+    """
     out = []
     ro, so = real.get('outcome'), sim.get('outcome')
     if ro == 'DOCKED' and so == 'DOCKED':
@@ -1484,7 +1691,14 @@ def shade_stages(ax, tl: Timeline, label: bool = True) -> None:
 
 
 def attempt_xlim(axs, tl) -> str:
-    """Show the attempt: from arming to 3 s after commanding ended; return a note if the record goes on."""
+    """Limit the axes to the attempt and return a note if the record goes on past it.
+
+    The attempt runs from arming to 3 s after commanding ends.
+
+    Args:
+        axs: Axes, one or several.
+        tl: Timeline of the run.
+    """
     hi = min(tl.t_end, tl.t_cmd + 3.0)
     for ax in np.atleast_1d(axs):
         ax.set_xlim(-0.5, hi - tl.t0 + 0.3)
@@ -2364,7 +2578,11 @@ def final_str(f):
 
 
 def aggregate(out_root: Path) -> None:
-    """INDEX.md, aggregate.csv and the cross-run figures from every <run>/metrics.json."""
+    """Write INDEX.md, aggregate.csv and the cross-run figures from every <run>/metrics.json.
+
+    Args:
+        out_root: Records directory.
+    """
     runs = []
     for p in sorted(out_root.glob('*/metrics.json')):
         try:
@@ -2432,7 +2650,13 @@ def firmware_era(r: dict) -> str:
 
 
 def era_bands(ax, rows: list, label: bool = True) -> None:
-    """Separate the drive's firmware eras between the rows (y = row index); label each at the right edge."""
+    """Separate the drive's firmware eras between the rows, whose y is the row index.
+
+    Args:
+        ax: Axes to draw on.
+        rows: Run records, one per row.
+        label: Label each era at the right edge.
+    """
     eras = [firmware_era(r) for r in rows]
     start = 0
     for i in range(1, len(eras) + 1):
@@ -2451,7 +2675,12 @@ def span(vals, spec='.2f') -> str:
 
 
 def aggregate_figures(runs: list, out_root: Path) -> list:
-    """The cross-run figures, each with its caption and reasoning (numbers computed from the runs)."""
+    """Draw the cross-run figures, each with a caption and reasoning computed from the runs.
+
+    Args:
+        runs: Metrics of every run.
+        out_root: Records directory.
+    """
     plt = style()
     figs = []
     docks = [r for r in runs if r['kind'] == 'dock']
@@ -2671,7 +2900,12 @@ def index_md(runs: list, out_root: Path, figs: list | None = None) -> str:
 
 
 def embed(md: str, sub: str) -> str:
-    """A sub-page's Markdown inside INDEX.md: headings one level down, relative links rebased from sub/."""
+    """Return a sub-page's Markdown for INDEX.md, headings demoted and links rebased from sub/.
+
+    Args:
+        md: Markdown of the sub-page.
+        sub: Folder of the sub-page, relative to INDEX.md.
+    """
     import posixpath
     md = re.sub(r'^(#+) ', lambda g: '#' + g.group(1) + ' ', md, flags=re.M)
 

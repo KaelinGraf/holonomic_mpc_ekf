@@ -47,7 +47,11 @@ def ros():
 
 
 def mock_params(**overrides):
-    """Parameter overrides for a hardware-free node, as launch would pass them."""
+    """Return parameter overrides for a hardware-free node, as launch would pass them.
+
+    Args:
+        **overrides: Parameter values that replace or add to the mock defaults.
+    """
     from rclpy.parameter import Parameter
 
     params = {
@@ -61,7 +65,11 @@ def mock_params(**overrides):
 
 
 class Rig:
-    """The camera node plus a probe that subscribes exactly as the laptop does."""
+    """The camera node plus a probe that subscribes exactly as the laptop does.
+
+    Args:
+        **overrides: Node parameter values that replace or add to the mock defaults.
+    """
 
     def __init__(self, **overrides):
         import rclpy
@@ -108,7 +116,12 @@ class Rig:
             'silently.')
 
     def wait_for_images(self, count=1, timeout_s=TIMEOUT_S):
-        """Spin until `count` images have arrived, asserting QoS compatibility."""
+        """Spin until `count` images have arrived, asserting QoS compatibility.
+
+        Args:
+            count: Number of images to wait for.
+            timeout_s: Longest wait before the test fails [s].
+        """
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             self.check_qos()
@@ -120,7 +133,12 @@ class Rig:
                     f'within {timeout_s:.0f} s')
 
     def call_full_res(self, max_age=0.0, timeout_s=TIMEOUT_S):
-        """Call image_full_res and spin until it answers."""
+        """Call image_full_res and spin until it answers.
+
+        Args:
+            max_age: Oldest acceptable retained frame [s]; 0 accepts any age.
+            timeout_s: Longest wait for the answer before the test fails [s].
+        """
         assert self.client.wait_for_service(timeout_sec=5.0), \
             'image_full_res never appeared on the graph'
         future = self.client.call_async(self._srv_type.Request(max_age=float(max_age)))

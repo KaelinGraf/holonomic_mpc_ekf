@@ -43,7 +43,11 @@ def ros():
 
 
 def mock_params(**overrides):
-    """Parameter overrides for a hardware-free node, as launch would pass them."""
+    """Build parameter overrides for a hardware-free node, as launch would pass them.
+
+    Args:
+        **overrides: Parameter values that replace or extend the mock defaults.
+    """
     from rclpy.parameter import Parameter
 
     params = {
@@ -58,7 +62,11 @@ def mock_params(**overrides):
 
 
 class Rig:
-    """The IMU node plus a probe that subscribes as an off-the-shelf consumer would."""
+    """IMU node plus a probe that subscribes as an off-the-shelf consumer would.
+
+    Args:
+        **overrides: Node parameters that replace or extend the mock_params defaults.
+    """
 
     def __init__(self, **overrides):
         import rclpy
@@ -99,7 +107,12 @@ class Rig:
             'nothing, silently.')
 
     def wait_for_samples(self, count=1, timeout_s=TIMEOUT_S):
-        """Spin until `count` samples have arrived, asserting QoS compatibility."""
+        """Spin until `count` samples have arrived, asserting QoS compatibility.
+
+        Args:
+            count: Number of samples to wait for.
+            timeout_s: Longest wait in s before the test fails.
+        """
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             self.check_qos()

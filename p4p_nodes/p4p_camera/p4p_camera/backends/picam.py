@@ -30,7 +30,12 @@ from .. import frames
 
 
 class Picamera2Backend(CameraBackend):
-    """One Picamera2 instance streaming raw mono frames."""
+    """Backend of one Picamera2 instance streaming raw mono frames, with the ISP bypassed.
+
+    Args:
+        params: Backend settings from the node's parameters (camera_index, crop_top, ...).
+        logger: rclpy logger.
+    """
 
     name = 'picamera2'
 
@@ -143,7 +148,13 @@ class Picamera2Backend(CameraBackend):
         return full, sensor_ns
 
     def _wait_for_request(self, timeout_s: float):
-        """Fetch one request, with a bounded wait where the build supports it."""
+        """Fetch one request, with a bounded wait where the build supports it.
+
+        A build without wait(timeout=...) falls back to an unbounded wait, logged once.
+
+        Args:
+            timeout_s: Longest wait for the request [s].
+        """
         cam = self._cam
         job = cam.capture_request(wait=False)
         if not self._unbounded_wait:

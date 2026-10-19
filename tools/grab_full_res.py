@@ -49,7 +49,11 @@ def parse_args(argv):
 
 
 class Grabber(Node):
-    """A one-shot client for the camera node's full-resolution service."""
+    """A one-shot client for the camera node's full-resolution service.
+
+    Args:
+        service: Name of the full-resolution image service, if remapped.
+    """
 
     def __init__(self, service: str):
         super().__init__('grab_full_res')

@@ -34,7 +34,7 @@ def test_either_row_fills_the_installed_message(row):
 
 @pytest.mark.skipif(not TELEMETRY_HAS_PULSES, reason='this convchart_interfaces predates pulse_us')
 def test_the_new_columns_reach_the_message():
-    """With both ends updated, the request and the four pulses are published."""
+    """A full-width row publishes the request and the four pulse widths."""
     msg = DriveTelemetry()
     fill_telemetry(msg, protocol.parse_line(NEW))
     assert (msg.requested.linear.x, msg.requested.linear.y,
@@ -44,7 +44,7 @@ def test_the_new_columns_reach_the_message():
 
 @pytest.mark.skipif(not TELEMETRY_HAS_PULSES, reason='this convchart_interfaces predates pulse_us')
 def test_older_firmware_leaves_the_new_fields_zero():
-    """All-zero pulses are how a reader tells 'not reported' from neutral (1500)."""
+    """A legacy row leaves the pulses zero, which a reader tells apart from neutral (1500)."""
     msg = DriveTelemetry()
     fill_telemetry(msg, protocol.parse_line(OLD))
     assert list(msg.pulse_us) == [0, 0, 0, 0]

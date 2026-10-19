@@ -20,7 +20,7 @@ def test_ten_hertz_offers_one_and_a_half_periods(make_rig):
 
 
 def test_a_rate_below_the_floor_is_clamped_rather_than_fatal(make_rig):
-    """5 Hz is the floor: below it no offered deadline fits inside 0.2 s."""
+    """A rate below the 5 Hz floor is clamped, since no slower deadline fits inside 0.2 s."""
     rig = make_rig(frame_rate=1.0)
     assert rig.node._frame_rate == pytest.approx(5.0)
     assert _deadline_s(rig.node) == pytest.approx(0.2, abs=1e-6)
@@ -114,7 +114,7 @@ def test_camera_info_can_be_turned_off(make_rig):
 
 
 def test_the_node_streams_the_detector_input_size(make_rig):
-    """640x480 is not arbitrary: it makes inference.py's own resize the identity."""
+    """The stream is 640x480, which makes inference.py's own resize the identity."""
     rig = make_rig()
     msg = rig.wait_for_images(1)[0]
     assert (rig.node._info.width, rig.node._info.height) == \

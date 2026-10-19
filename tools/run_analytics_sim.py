@@ -40,8 +40,19 @@ def _import(code_dir: str):
 
 
 def _mpc_step(mpc, x, r_gyro, u_prev, y_ref, v_max, r_max, out):
-    """Mpc.step with whatever per-stage settings this commit's supervisor Output carries and its
-    Mpc takes.
+    """Call Mpc.step with each per-stage setting the Output carries and this commit's Mpc takes.
+
+    The settings are qw (tracking weights) and l1_cap (speed-cap shape).
+
+    Args:
+        mpc: This commit's Mpc.
+        x: State estimate the tick used.
+        r_gyro: Gyro yaw rate, in rad/s.
+        u_prev: Previous command.
+        y_ref: Reference of the stage.
+        v_max: Speed cap, in m/s.
+        r_max: Yaw-rate cap, in rad/s.
+        out: This commit's supervisor Output for the stage.
     """
     takes = inspect.signature(mpc.step).parameters
     kw = {k: getattr(out, k) for k in ('qw', 'l1_cap') if k in takes and hasattr(out, k)}
@@ -49,7 +60,16 @@ def _mpc_step(mpc, x, r_gyro, u_prev, y_ref, v_max, r_max, out):
 
 
 def _stage_output(sup, Stage, stage: str, resume: str, u_prev, x):
-    """This commit's supervisor Output for a stage, without running its stage machine."""
+    """Return this commit's supervisor Output for a stage, without running its stage machine.
+
+    Args:
+        sup: This commit's Supervisor.
+        Stage: This commit's Stage enum.
+        stage: Name of the stage.
+        resume: Name of the stage HOLD returns to.
+        u_prev: Previous command.
+        x: State estimate.
+    """
     sup.resume = Stage[resume]
     try:
         return sup._output(Stage[stage], u_prev, x)
@@ -58,7 +78,14 @@ def _stage_output(sup, Stage, stage: str, resume: str, u_prev, x):
 
 
 def replay(code_dir: str, req: dict) -> dict:
-    """Re-run each logged tick; return per-tick plan and command differences."""
+    """Re-run each logged tick and return the per-tick plan and command differences.
+
+    The reference and caps are the logged ones; the per-stage MPC settings come from this commit.
+
+    Args:
+        code_dir: Directory holding the commit's dock_control package.
+        req: Request with the config and the logged ticks.
+    """
     _, _, Mpc, _, Stage, Supervisor = _import(code_dir)
     p = req['config']
     mpc, sup = Mpc(p), Supervisor(p)
@@ -78,7 +105,12 @@ def replay(code_dir: str, req: dict) -> dict:
 
 
 def simulate(code_dir: str, req: dict) -> dict:
-    """Closed loop from req['start'] on the run's drive model; log at log_dt (see the module doc)."""
+    """Run the closed loop from req['start'] on the run's drive model, logging every log_dt.
+
+    Args:
+        code_dir: Directory holding the commit's dock_control package.
+        req: Request with the config, the start pose, the drive model and the simulation settings.
+    """
     Ekf, FiducialChain, Mpc, Inputs, Stage, Supervisor = _import(code_dir)
     p = req['config']
     rng = np.random.default_rng(req.get('seed', 1))

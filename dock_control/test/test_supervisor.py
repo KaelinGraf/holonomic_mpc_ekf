@@ -9,7 +9,11 @@ import pytest
 
 
 def _inputs(**changes):
-    """Return armed, healthy inputs with the robot 1 m out, changed as given."""
+    """Return armed, healthy inputs with the robot 1 m out, changed as given.
+
+    Args:
+        **changes: Inputs fields to override.
+    """
     values = {'now': 0.0, 'armed': True, 'drive_ok': True,
               'x': np.array([-1.0, 0.1, 0.05, 0.0, 0.0]), 'p_diag': np.full(5, 1e-6),
               'est_age': 0.004, 'imu_rate': 150.0, 'fix_age': 0.05, 'u_last': np.zeros(3)}
@@ -25,20 +29,20 @@ def _approaching(p):
 
 
 def test_stage_values_match_the_message():
-    """Stage and dock_msgs/DockStage agree on every value."""
+    """Check that Stage and dock_msgs/DockStage agree on every value."""
     msg = pytest.importorskip('dock_msgs.msg')
     for stage in Stage:
         assert getattr(msg.DockStage, stage.name) == stage.value
 
 
 def test_disarmed_means_idle_with_the_command_disabled(p):
-    """Nothing moves until the operator arms, even with the drive ready."""
+    """Check that nothing moves until the operator arms, even with the drive ready."""
     out = Supervisor(p).step(Inputs(drive_ok=True))
     assert out.stage == Stage.IDLE and not out.command_enabled
 
 
 def test_nominal_run_through_the_table(p):
-    """IDLE, ACQUIRE, APPROACH, FINAL, DOCKED, and back to IDLE on disarm (the two-stage table)."""
+    """Step through IDLE, ACQUIRE, APPROACH, FINAL, DOCKED, and back to IDLE on disarm."""
     for key in ('look_at_m', 'slow_m', 'align_vtol', 'align_rtol_deg', 'align_dwell_s'):
         p['sup'].pop(key, None)
     p['lim'].pop('v_lat_final', None)
@@ -72,7 +76,7 @@ def test_nominal_run_through_the_table(p):
 
 
 def test_hold_on_marker_loss_then_resume_or_abort(p):
-    """A lost fix holds the current pose; back within 2 s it resumes, otherwise it aborts."""
+    """Check that a lost fix holds the pose, then resumes within 2 s or else aborts."""
     sup = _approaching(p)
     out = sup.step(_inputs(now=1.0, fix_age=0.6))
     assert out.stage == Stage.HOLD and out.command_enabled
@@ -85,7 +89,7 @@ def test_hold_on_marker_loss_then_resume_or_abort(p):
 
 
 def test_two_mpc_misses_hold(p):
-    """Two consecutive fallbacks or blown budgets hold the robot."""
+    """Check that two consecutive fallbacks or blown budgets hold the robot."""
     sup = _approaching(p)
     assert sup.step(_inputs(mpc_misses=1)).stage == Stage.APPROACH
     assert sup.step(_inputs(mpc_misses=2)).stage == Stage.HOLD
@@ -94,14 +98,14 @@ def test_two_mpc_misses_hold(p):
 @pytest.mark.parametrize('bad', [{'drive_ok': False}, {'p_diag': np.full(5, 0.06 ** 2)},
                                  {'est_age': 0.15}])
 def test_abort_from_a_moving_stage(p, bad):
-    """Drive lost, covariance above (0.05 m)^2, or the estimate stale, aborts at once."""
+    """Check that a lost drive, a stale estimate or a variance over (0.05 m)^2 aborts at once."""
     assert _approaching(p).step(_inputs(**bad)).stage == Stage.ABORT
 
 
 @pytest.mark.parametrize('bad', [{'imu_rate': 50.0}, {'imu_rate': 130.0}, {'imu_rate': 0.0},
                                  {'est_age': 0.15}, {'drive_ok': False}])
 def test_motion_waits_for_a_healthy_imu_and_drive(p, bad):
-    """ACQUIRE holds until the IMU is at 90 % of its rate or more, the estimate fresh, drive up."""
+    """Check that ACQUIRE waits for the IMU at 90 % of its rate, a fresh estimate and the drive."""
     sup = Supervisor(p)
     sup.step(_inputs(x=None))
     assert sup.step(_inputs(**bad)).stage == Stage.ACQUIRE
@@ -109,14 +113,14 @@ def test_motion_waits_for_a_healthy_imu_and_drive(p, bad):
 
 
 def test_a_fast_imu_does_not_hold_the_start(p):
-    """The EKF steps each sample's interval, so an IMU above imu.rate is no reason to wait."""
+    """Check that an IMU faster than imu.rate does not hold the start."""
     sup = Supervisor(p)
     sup.step(_inputs(x=None))
     assert sup.step(_inputs(imu_rate=181.0)).stage == Stage.APPROACH
 
 
 def test_the_heading_never_aborts_the_approach(p):
-    """Far off the board's normal, even for seconds, the supervisor keeps going: the MPC aligns."""
+    """Check that a heading far off the board's normal never aborts APPROACH: the MPC aligns."""
     off = np.array([-0.45, -0.25, math.radians(32.0), 0.0, 0.0])
     sup = _approaching(p)
     for k in range(40):
@@ -124,11 +128,7 @@ def test_the_heading_never_aborts_the_approach(p):
 
 
 def test_approach_weights_ramp_from_far_to_near_with_the_distance_to_go(p):
-    """
-    mpc.qw far out, mpc.qw_near close in, smoothstep between sup.qw_ramp_m along x.
-
-    The lateral correction should start a bit earlier (2026-10-14).
-    """
+    """Check that APPROACH's multipliers ramp from mpc.qw to mpc.qw_near across sup.qw_ramp_m."""
     q = copy.deepcopy(p)
     q['mpc']['qw'], q['mpc']['qw_near'] = [1.0, 0.25, 2.0], [1.0, 1.0, 2.0]
     q['sup']['qw_ramp_m'] = [0.8, 0.25]
@@ -151,7 +151,11 @@ def test_approach_weights_ramp_from_far_to_near_with_the_distance_to_go(p):
 
 
 def _g(p):
-    """Return a copy of p with the align-then-plunge settings of 2026-10-14."""
+    """Return a copy of p with the align-then-plunge settings.
+
+    Args:
+        p: Demo parameters.
+    """
     q = copy.deepcopy(p)
     q['sup'].update(standoff=0.08, align_tol_m=0.010, align_tol_deg=2.0, standoff_tol=0.015,
                     align_vtol=0.03, align_rtol_deg=4.0, align_dwell_s=0.2,
@@ -161,7 +165,7 @@ def _g(p):
 
 
 def test_approach_looks_at_the_board_far_out_and_straight_ahead_near_the_standoff(p):
-    """Far out the heading reference is the camera's bearing to the board centre; near, zero."""
+    """Check that the heading reference is the bearing to the board far out, and zero near."""
     sup = Supervisor(_g(p))
     mx, my = p['geom']['marker_m']
     far = np.array([-1.0, 0.4, 0.0, 0.0, 0.0])
@@ -174,7 +178,7 @@ def test_approach_looks_at_the_board_far_out_and_straight_ahead_near_the_standof
 
 
 def test_the_standoff_hands_over_only_once_settled_and_aligned(p):
-    """Aligned but moving, or not yet for align_dwell_s, stays in APPROACH."""
+    """Check that APPROACH hands over to FINAL only after align_dwell_s settled and aligned."""
     sup = Supervisor(_g(p))
     sup.step(_inputs(x=None))
     at = np.array([-0.08, 0.004, math.radians(0.5), 0.0, 0.0])
@@ -201,7 +205,7 @@ def test_approach_slows_near_the_standoff_no_faster_than_the_drive_can_brake(p):
 
 
 def test_acquire_waits_until_the_estimate_is_sure_enough_to_move(p):
-    """With sup.start_sigma_m, ACQUIRE holds while the position sd is over it."""
+    """Check that ACQUIRE holds while the position sd is over sup.start_sigma_m."""
     q = copy.deepcopy(p)
     q['sup']['start_sigma_m'] = 0.03
     sup = Supervisor(q)

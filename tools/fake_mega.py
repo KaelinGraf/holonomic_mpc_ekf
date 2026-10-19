@@ -64,7 +64,27 @@ U32 = 0xFFFFFFFF
 
 @dataclass(frozen=True)
 class MegaConfig:
-    """Mirror of p4p_arduino/config.h."""
+    """Mirror of p4p_arduino/config.h, overridable to explore the firmware's own knobs.
+
+    Args:
+        stream_rate_hz: Telemetry rate, in Hz.
+        control_rate_hz: Control loop rate, in Hz.
+        cmd_timeout_ms: Command watchdog timeout, in ms.
+        cmd_buf_len: Size of the command line buffer, in bytes.
+        imu_report_us: IMU report period, in us.
+        vx_sign: Sign trim on vx.
+        vy_sign: Sign trim on vy.
+        wz_sign: Sign trim on wz.
+        channels_rotated: DRIVE_CHANNELS_ROTATED, the channel rotation in the mixing.
+        chassis_l_plus_w: CHASSIS_L_PLUS_W, the turn lever, in m.
+        wheel_max_mps: WHEEL_MAX_MPS, the wheel speed at full deflection, in m/s.
+        strafe_gain: STRAFE_GAIN, the multiplier on sideways commands.
+        motor_us_min: Shortest servo pulse, in us.
+        motor_us_neutral: Neutral servo pulse, in us.
+        motor_us_max: Longest servo pulse, in us.
+        mirror_left: Direction multiplier of the left motors.
+        mirror_right: Direction multiplier of the right motors.
+    """
     stream_rate_hz: int = 50
     control_rate_hz: int = 50
     cmd_timeout_ms: int = 400
@@ -85,7 +105,13 @@ class MegaConfig:
 
 
 def _f32(x: float) -> float:
-    """Round to single precision."""
+    """Round to single precision, since `double` is 32-bit on AVR.
+
+    Without it the last telemetry digit can differ from the board's.
+
+    Args:
+        x: Value to round.
+    """
     return struct.unpack("f", struct.pack("f", x))[0]
 
 
@@ -99,8 +125,12 @@ _INF_RE = re.compile(r"[+-]?(?:inf(?:inity)?|nan)", re.IGNORECASE)
 
 
 def _strtod(s: str) -> tuple[float, str] | None:
-    """avr-libc strtod: consume the longest numeric prefix, return (value, rest), or None when
-    nothing numeric was consumed -- which is how the firmware spots junk.
+    """Parse a numeric prefix as avr-libc strtod does, returning (value, rest) or None.
+
+    Leading whitespace is skipped, "inf" and "nan" parse, and hex floats do not.
+
+    Args:
+        s: Text to parse.
     """
     t = s.lstrip(" \t")
     m = _INF_RE.match(t) or _NUM_RE.match(t)
@@ -110,7 +140,14 @@ def _strtod(s: str) -> tuple[float, str] | None:
 
 
 def _print_float(value: float, digits: int) -> str:
-    """Arduino Print::printFloat, digit for digit."""
+    """Format a float as Arduino Print::printFloat does, digit for digit.
+
+    It rounds half away from zero, and gives "nan", "inf" or "ovf" instead of a number.
+
+    Args:
+        value: Value to format.
+        digits: Digits after the decimal point.
+    """
     if math.isnan(value):
         return "nan"
     if math.isinf(value):
@@ -138,8 +175,11 @@ def _print_float(value: float, digits: int) -> str:
 
 
 class _RateTimer:
-    """timing.h RateTimer. Fires once per period, and resynchronises instead of firing in a burst
-    when the caller falls far behind.
+    """The timing.h RateTimer: fires once per period, resynchronising when far behind.
+
+    Args:
+        period_us: Period, in us.
+        now_us: Current time, in us, which is also the first due time.
     """
 
     def __init__(self, period_us: int, now_us: int) -> None:
@@ -156,7 +196,19 @@ class _RateTimer:
 
 
 class FakeMega:
-    """One Mega, with no transport attached."""
+    """One Mega with no transport attached: feed it downlink bytes, pump it, drain its uplink.
+
+    Time is injected, so a test can cover the watchdog and the millis() overflow quickly.
+
+    Args:
+        cfg: Firmware constants, or None for the defaults.
+        start_ms: Clock at power-on, in ms.
+        wz_gain: Measured yaw rate over the commanded one; 1.0 is calibrated.
+        yaw_noise_dps: Standard deviation of the gyro noise, in deg/s.
+        seed: Seed of the noise generator.
+        imu_fail_count: Number of "BNO085 not found" lines in the boot banner.
+        legacy_telemetry: Emit the nine-column telemetry, without request or pulse columns.
+    """
 
     def __init__(self, cfg: MegaConfig | None = None, *, start_ms: int = 0,
                  wz_gain: float = 1.0, yaw_noise_dps: float = 0.0,
@@ -171,7 +223,11 @@ class FakeMega:
         self.reset(start_ms)
 
     def reset(self, now_ms: int = 0) -> None:
-        """Power-on or DTR reset. Queues the boot banner and lands DISARMED."""
+        """Reset as at power-on or DTR: queue the boot banner and land DISARMED.
+
+        Args:
+            now_ms: Clock at the reset, in ms.
+        """
         c = self.cfg
         self._t_ms = now_ms & U32
         now_us = (self._t_ms * 1000) & U32
@@ -202,8 +258,7 @@ class FakeMega:
         self._emit(LEGACY_TELEMETRY_HEADER if self.legacy_telemetry else TELEMETRY_HEADER)
 
     def inject_imu_reset(self) -> None:
-        """A spontaneous BNO reset: bumps `resets` and drops the heading anchor,
-        so the next sample does not integrate the jump."""
+        """Simulate a spontaneous BNO reset: bump `resets` and drop the heading anchor."""
         self._resets += 1
 
     def feed(self, data: bytes) -> None:
@@ -214,7 +269,11 @@ class FakeMega:
         return out
 
     def pump(self, now_ms: int) -> None:
-        """One pass of loop(). Call at >= 1 kHz for realistic behaviour."""
+        """Run one pass of loop(); call it at 1 kHz or more for realistic behaviour.
+
+        Args:
+            now_ms: Clock, in ms.
+        """
         self._t_ms = now_ms & U32
         now_us = (self._t_ms * 1000) & U32
         self._poll_imu(now_us)
@@ -254,7 +313,7 @@ class FakeMega:
 
     @property
     def pulses(self) -> tuple[int, int, int, int]:
-        """The pulse widths last written, by channel: lf, rf, lr, rr [us]."""
+        """Return the pulse widths last written, by channel: lf, rf, lr, rr [us]."""
         return self._pulses
 
     def _age_ms(self) -> int:
@@ -378,7 +437,12 @@ class FakeMega:
         self._applied = tuple(_f32(r * scale) for r in req)
 
     def _to_pulse(self, norm: float, mirror: float) -> int:
-        """drive.cpp toPulse: full deflection is +-(max - neutral); the C cast truncates."""
+        """Convert a normalised wheel speed to a pulse width, as drive.cpp toPulse does.
+
+        Args:
+            norm: Wheel speed as a fraction of full deflection, in [-1, 1].
+            mirror: Direction multiplier of the wheel's side.
+        """
         c = self.cfg
         norm = min(1.0, max(-1.0, _f32(norm * mirror)))
         us = c.motor_us_neutral + int(_f32(norm * float(c.motor_us_max - c.motor_us_neutral)))
@@ -405,7 +469,15 @@ class FakeMega:
 
 
 def run_pty(mega: FakeMega, *, link: str | None = None, quiet: bool = False) -> None:
-    """Expose `mega` on a pseudo-terminal and run it against the wall clock."""
+    """Expose `mega` on a pseudo-terminal and run it against the wall clock.
+
+    Opening the port resets the Mega, as the DTR line does on a USB CDC port.
+
+    Args:
+        mega: Fake Mega to run.
+        link: Path of a symlink to the pty device, or None for no symlink.
+        quiet: Print only the device path, without status lines.
+    """
     master, slave = os.openpty()
     tty.setraw(slave)
     dev = os.ttyname(slave)
@@ -467,8 +539,11 @@ def run_pty(mega: FakeMega, *, link: str | None = None, quiet: bool = False) -> 
 
 
 def _rows(blob: bytes) -> list[str]:
-    """CSV data rows only: drop the '#' status lines and the header, the way the
-    Pi-side parser must."""
+    """Return the CSV data rows only, without the '#' status lines and the header.
+
+    Args:
+        blob: Raw uplink bytes.
+    """
     return [ln for ln in blob.decode("ascii", "replace").split("\r\n")
             if ln and not ln.startswith("#") and ln.split(",", 1)[0] != "t_ms"]
 
@@ -480,7 +555,7 @@ def _run(mega: FakeMega, t_from: int, t_to: int) -> list[str]:
 
 
 def selftest() -> int:
-    """Protocol checks that need no ROS, no Docker and no hardware."""
+    """Run the protocol checks that need no ROS, no Docker and no hardware."""
     fails: list[str] = []
 
     def ok(cond: bool, msg: str) -> None:

@@ -30,7 +30,12 @@ _FIELD = 110
 
 
 class MockBackend(CameraBackend):
-    """Deterministic frames at the requested rate."""
+    """Backend of deterministic synthetic or replayed frames at the requested rate.
+
+    Args:
+        params: Backend settings; reads mock_image, mock_latency_ms, mock_rate and frame_rate.
+        logger: rclpy logger.
+    """
 
     name = 'mock'
 
@@ -106,13 +111,18 @@ class MockBackend(CameraBackend):
 
     @staticmethod
     def _stamp_counter(frame: np.ndarray, count: int) -> None:
-        """Burn the frame number in, so a human can see the stream is live."""
+        """Burn the frame number in, so a viewer can see the stream is live.
+
+        Args:
+            frame: Frame to draw on, in place.
+            count: Frame number.
+        """
         cv2.putText(frame, str(count), (20, 80), cv2.FONT_HERSHEY_SIMPLEX,
                     2.0, 255, 3, cv2.LINE_AA)
 
 
 def expected_stream_markers() -> list[tuple[int, int, int]]:
-    """Marker positions and values as they should decode off the 640x480 stream."""
+    """Return the (x, y, value) of each marker as it should decode off the 640x480 stream."""
     out = []
     for x, y in _MARKERS:
         out.append((int(x / frames.SCALE), int(y / frames.SCALE), _MARKER_VALUE))

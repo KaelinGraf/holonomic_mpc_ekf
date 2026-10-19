@@ -27,7 +27,12 @@ from .. import frames
 
 
 class V4L2Backend(CameraBackend):
-    """A single V4L2 capture device delivering 8-bit greyscale."""
+    """Backend of a single V4L2 capture device delivering 8-bit greyscale.
+
+    Args:
+        params: Backend settings; reads device, crop_top and frame_rate.
+        logger: rclpy logger.
+    """
 
     name = 'v4l2'
 

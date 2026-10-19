@@ -65,7 +65,11 @@ _BUFFER_S = 0.1
 
 
 class ImuNode(Node):
-    """Poll the BNO085 and publish sensor_msgs/Imu."""
+    """ROS 2 node that polls the BNO085 and publishes sensor_msgs/Imu on imu/data.
+
+    Args:
+        **kwargs: Passed through to rclpy.node.Node, such as parameter_overrides.
+    """
 
     def __init__(self, **kwargs) -> None:
         super().__init__('imu_node', **kwargs)
@@ -172,7 +176,12 @@ class ImuNode(Node):
             f'frame_id={self._frame_id}')
 
     def _rate(self, name: str, minimum: float) -> float:
-        """Read a positive rate, clamping loudly rather than refusing to start."""
+        """Read a positive rate, clamping loudly rather than refusing to start.
+
+        Args:
+            name: Name of the ROS parameter to read.
+            minimum: Smallest usable value; anything below it is logged and clamped to it.
+        """
         value = float(self.get_parameter(name).value)
         if value < minimum:
             self.get_logger().error(
@@ -235,7 +244,12 @@ class ImuNode(Node):
                 backend.stop()
 
     def _publish(self, sample: orientation.ImuSample, stamp) -> None:
-        """Fill and publish one Imu, then check whether heading jumped."""
+        """Fill and publish one Imu, then check whether heading jumped.
+
+        Args:
+            sample: Validated sample to publish.
+            stamp: ROS time taken just before the read, as a builtin_interfaces/Time.
+        """
         quat = orientation.normalise_quaternion(sample.quat)
         if quat is None:
             self._invalid += 1
@@ -274,7 +288,11 @@ class ImuNode(Node):
         self._last_yaw = yaw
 
     def _on_reset(self, exc: Exception) -> None:
-        """Count a self-reset, then try to re-enable the reports in place."""
+        """Count a self-reset, then try to re-enable the reports in place.
+
+        Args:
+            exc: Reset error raised by the backend, quoted in the log.
+        """
         self._resets += 1
         self.get_logger().error(
             f'the BNO085 reset itself ({exc}); its heading has re-zeroed, so continuity '
@@ -314,7 +332,11 @@ class ImuNode(Node):
         self._last_change_mono = time.monotonic()
 
     def _drop(self, why: str) -> None:
-        """Release the sensor so the next pass reopens it. Mirrors the bridge's."""
+        """Release the sensor so the next pass of the read loop reopens it.
+
+        Args:
+            why: Reason for dropping, logged and kept as the last error.
+        """
         self._reconnects += 1
         self._last_open_error = why
         self.get_logger().error(f'dropping the IMU: {why}', throttle_duration_sec=5.0)
@@ -359,7 +381,10 @@ class ImuNode(Node):
                else f', last error: {self._last_open_error or "none"}'))
 
     def close(self) -> None:
-        """Stop the read thread and release the sensor."""
+        """Stop the read thread and release the sensor.
+
+        Safe to call more than once, and never raises.
+        """
         self._running = False
         thread, self._thread = self._thread, None
         if thread is not None and thread.is_alive():
@@ -377,7 +402,11 @@ class ImuNode(Node):
 
 
 def main(args: list[str] | None = None) -> None:
-    """Spin the IMU node, releasing the sensor on the way out."""
+    """Spin the IMU node, releasing the sensor on the way out.
+
+    Args:
+        args: Command-line arguments for rclpy.init, or None for sys.argv.
+    """
     rclpy.init(args=args)
     node = ImuNode()
     try:

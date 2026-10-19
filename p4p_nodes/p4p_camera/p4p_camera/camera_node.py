@@ -66,7 +66,11 @@ _SURPLUS_GUARD_FRACTION = 0.9
 
 
 class CameraNode(Node):
-    """Capture, downscale, publish, and serve the newest full-resolution frame."""
+    """Node that captures, downscales and publishes frames, and serves the newest full-res one.
+
+    Args:
+        **kwargs: Passed on to rclpy's Node, for example parameter_overrides.
+    """
 
     def __init__(self, **kwargs):
         super().__init__('camera_node', **kwargs)
@@ -187,7 +191,12 @@ class CameraNode(Node):
             f'offered deadline {offered:.3f} s')
 
     def _rate(self, name: str, minimum: float) -> float:
-        """Read a positive rate, clamping loudly rather than refusing to start."""
+        """Read a positive rate, clamping loudly rather than refusing to start.
+
+        Args:
+            name: Parameter name.
+            minimum: Lowest usable value, in the parameter's units.
+        """
         value = float(self.get_parameter(name).value)
         if value < minimum:
             self.get_logger().error(
@@ -196,7 +205,13 @@ class CameraNode(Node):
         return value
 
     def _load_camera_info(self, url: str) -> CameraInfo:
-        """Build the CameraInfo to publish, validating the resolution hard."""
+        """Build the CameraInfo to publish, validating the resolution hard.
+
+        A missing, unreadable or wrong-resolution file gives an uncalibrated CameraInfo.
+
+        Args:
+            url: Calibration YAML path or file:// URL; empty for none.
+        """
         info = CameraInfo()
         info.width, info.height = frames.STREAM[1], frames.STREAM[0]
         info.distortion_model = 'plumb_bob'
@@ -305,7 +320,11 @@ class CameraNode(Node):
         self.get_logger().info(f'{self._backend_name} camera open')
 
     def _drop(self, why: str) -> None:
-        """Close the backend so the next loop reopens it. Mirrors the bridge."""
+        """Close the backend so the next loop reopens it.
+
+        Args:
+            why: Reason for the drop, for the log line.
+        """
         self._drops += 1
         self._reconnects += 1
         self.get_logger().error(f'{why}; reopening the camera',
@@ -315,7 +334,12 @@ class CameraNode(Node):
             backend.stop()
 
     def _on_frame(self, full: np.ndarray, sensor_ns) -> None:
-        """Stamp, retain, downscale, encode and publish one frame."""
+        """Stamp, retain, downscale, encode and publish one frame.
+
+        Args:
+            full: Full-resolution uint8 mono frame of shape FULL (H, W).
+            sensor_ns: Sensor capture timestamp [ns], or None when the backend has none.
+        """
         now_ros_ns = self.get_clock().now().nanoseconds
         now_boot_ns = time.clock_gettime_ns(self._boot_clock)
 
@@ -364,7 +388,12 @@ class CameraNode(Node):
         self._last_frame_mono = time.monotonic()
 
     def _probe_capture_clock(self, sensor_ns, now_ros_ns: int) -> None:
-        """Latch whichever POSIX clock the sensor timestamps are actually on."""
+        """Latch whichever POSIX clock the sensor timestamps are actually on.
+
+        Args:
+            sensor_ns: Sensor capture timestamp of the first frame [ns], or None.
+            now_ros_ns: ROS clock time at the read [ns].
+        """
         self._clock_probed = True
         if sensor_ns is None:
             return
@@ -388,7 +417,14 @@ class CameraNode(Node):
             f'using {plausible[0]}')
 
     def _on_full_res(self, request, response):
-        """Return the newest retained full-resolution frame, encoded on demand."""
+        """Return the newest retained full-resolution frame, encoded on demand.
+
+        Never blocks waiting for a frame; a failure is reported in the response message.
+
+        Args:
+            request: GetFullResImage request, with max_age [s] (0 for any age).
+            response: GetFullResImage response to fill.
+        """
         response.success = False
         response.image.format = ''
         response.image.data = []
@@ -459,7 +495,10 @@ class CameraNode(Node):
                else f', last error: {self._last_open_error or "none"}'))
 
     def close(self) -> None:
-        """Stop capturing and release the camera."""
+        """Stop capturing and release the camera.
+
+        Call before destroy_node(); safe to call more than once, and never raises.
+        """
         self._running = False
         thread, self._thread = getattr(self, '_thread', None), None
         if thread is not None and thread.is_alive():
@@ -477,7 +516,11 @@ class CameraNode(Node):
 
 
 def main(args: list[str] | None = None) -> None:
-    """Spin the camera node, releasing the camera on the way out."""
+    """Spin the camera node, releasing the camera on the way out.
+
+    Args:
+        args: Command-line arguments for rclpy.init, or None for sys.argv.
+    """
     rclpy.init(args=args)
     node = CameraNode()
     executor = MultiThreadedExecutor(num_threads=2)

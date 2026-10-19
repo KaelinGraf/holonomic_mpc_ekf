@@ -11,10 +11,12 @@ import numpy as np
 
 
 def ik_matrix(Rw, lx, ly):
-    """
-    Return J^- (4x3): wheel speeds omega = J^- u from the body velocity u = [u_b, v_b, r_b].
+    """Return J^- (4x3): wheel speeds omega = J^- u from the body velocity u = [u_b, v_b, r_b].
 
-    L = lx + ly; mecanum_ik.m is the reference.
+    Args:
+        Rw: Wheel radius [m].
+        lx: Half the distance between the front and rear wheel centres [m].
+        ly: Half the distance between the left and right wheel centres [m].
     """
     L = lx + ly
     return np.array([[1.0, -1.0, -L],
@@ -24,7 +26,13 @@ def ik_matrix(Rw, lx, ly):
 
 
 def fk_matrix(Rw, lx, ly):
-    """Return J^+ (3x4): the body velocity u = J^+ omega from the wheel speeds."""
+    """Return J^+ (3x4): the body velocity u = J^+ omega from the wheel speeds.
+
+    Args:
+        Rw: Wheel radius [m].
+        lx: Half the distance between the front and rear wheel centres [m].
+        ly: Half the distance between the left and right wheel centres [m].
+    """
     k = 1.0 / (lx + ly)
     return 0.25 * Rw * np.array([[1.0, 1.0, 1.0, 1.0],
                                  [-1.0, 1.0, 1.0, -1.0],

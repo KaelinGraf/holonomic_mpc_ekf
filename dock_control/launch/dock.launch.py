@@ -24,7 +24,13 @@ from launch_ros.actions import Node
 
 
 def _static_tf(parent, child, T):
-    """Return a static_transform_publisher of child in parent, from a 4x4 transform."""
+    """Return a static_transform_publisher of child in parent, from a 4x4 transform.
+
+    Args:
+        parent: Parent frame id.
+        child: Child frame id.
+        T: Transform of child in parent (4x4).
+    """
     qx, qy, qz, qw = rot_to_quat(T[:3, :3])
     x, y, z = T[:3, 3]
     return Node(package='tf2_ros', executable='static_transform_publisher',
@@ -35,7 +41,11 @@ def _static_tf(parent, child, T):
 
 
 def _setup(context):
-    """Build the nodes once the launch arguments are known."""
+    """Build the nodes once the launch arguments are known.
+
+    Args:
+        context: Launch context that resolves the arguments.
+    """
     config = LaunchConfiguration('config').perform(context)
     rt = LaunchConfiguration('rt').perform(context).lower() == 'true'
     exposure_offset = float(LaunchConfiguration('exposure_offset').perform(context))

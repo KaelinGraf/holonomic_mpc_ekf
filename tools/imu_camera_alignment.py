@@ -37,7 +37,11 @@ R_LINK_OPTICAL = np.array([[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]])
 
 
 def quat_to_rot(q):
-    """(x, y, z, w) to a rotation matrix; q is (..., 4)."""
+    """Convert (x, y, z, w) quaternions to rotation matrices.
+
+    Args:
+        q: Quaternions (x, y, z, w), shape (..., 4).
+    """
     q = np.asarray(q, float)
     q = q / np.linalg.norm(q, axis=-1, keepdims=True)
     x, y, z, w = np.moveaxis(q, -1, 0)
@@ -56,7 +60,11 @@ def rot_to_quat(R):
 
 
 def log_rot(R):
-    """The rotation vector (axis * angle) of R."""
+    """Return the rotation vector (axis * angle) of R.
+
+    Args:
+        R: 3x3 rotation matrix.
+    """
     c = max(-1.0, min(1.0, (np.trace(R) - 1.0) / 2.0))
     ang = math.acos(c)
     v = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
@@ -80,13 +88,23 @@ def rot_z(a):
 
 
 def zyx(R):
-    """Yaw, pitch, roll [deg] of R = Rz(yaw) Ry(pitch) Rx(roll)."""
+    """Return the yaw, pitch and roll [deg] of R = Rz(yaw) Ry(pitch) Rx(roll).
+
+    Args:
+        R: 3x3 rotation matrix.
+    """
     return (math.degrees(math.atan2(R[1, 0], R[0, 0])), math.degrees(-math.asin(max(-1.0, min(1.0, R[2, 0])))),
             math.degrees(math.atan2(R[2, 1], R[2, 2])))
 
 
 def slerp_at(t_src, q_src, t):
-    """Quaternions q_src (stamps t_src, ascending) at times t, by slerp; nan outside the span."""
+    """Return the quaternions q_src at times t by slerp, nan outside their span.
+
+    Args:
+        t_src: Stamps of q_src, ascending, in seconds.
+        q_src: Quaternions (x, y, z, w), shape (n, 4).
+        t: Times to interpolate at, in seconds.
+    """
     q_src = np.asarray(q_src, float)
     out = np.full((len(t), 4), np.nan)
     j = np.searchsorted(t_src, t)
@@ -108,7 +126,13 @@ def slerp_at(t_src, q_src, t):
 
 
 def kabsch(a, b, w=None):
-    """The rotation X minimising sum w |b - X a|^2 over rows a, b (3-vectors)."""
+    """Return the rotation X minimising sum w |b - X a|^2 over rows a, b.
+
+    Args:
+        a: Source 3-vectors, one per row.
+        b: Target 3-vectors, one per row.
+        w: Weight of each row, or None for equal weights.
+    """
     w = np.ones(len(a)) if w is None else w
     H = (a * w[:, None]).T @ b
     U, _, Vt = np.linalg.svd(H)
@@ -117,9 +141,20 @@ def kabsch(a, b, w=None):
 
 
 def rotation_fit(t_imu, q_imu, t_cam, R_cm, shift=0.0, lag_s=(0.3, 1.5), min_deg=3.0, rng=None, boot=0):
-    """
-    X = R_CI from turn pairs. q_imu: IMU orientation (body to world); R_cm: board in the optical frame.
-    Pairs (i, j) of camera frames lag_s apart whose turn exceeds min_deg. Returns (X, residual deg, pairs, boot Xs).
+    """Fit X = R_CI from pairs of turns seen by both the IMU and the camera.
+
+    A pair is two camera frames lag_s apart whose turn exceeds min_deg.
+
+    Args:
+        t_imu: IMU stamps, in seconds.
+        q_imu: IMU orientation (body to world) at each stamp, as (x, y, z, w).
+        t_cam: Camera frame stamps, in seconds.
+        R_cm: Rotation of the board in the optical frame at each camera frame.
+        shift: Time added to the camera stamps to sample the IMU, in seconds.
+        lag_s: (shortest, longest) time between the frames of a pair, in seconds.
+        min_deg: Smallest turn a pair must make, in degrees.
+        rng: Random generator for the bootstrap, or None for a seeded one.
+        boot: Number of bootstrap resamples.
     """
     q_at = slerp_at(t_imu, q_imu, t_cam + shift)
     ok = ~np.isnan(q_at[:, 0])
@@ -157,7 +192,12 @@ def rotation_fit(t_imu, q_imu, t_cam, R_cm, shift=0.0, lag_s=(0.3, 1.5), min_deg
 
 
 def smooth(y, n):
-    """Centered moving average over n samples (odd), edges shortened."""
+    """Return the centred moving average of y over n samples, padding the edges with end values.
+
+    Args:
+        y: Samples along axis 0.
+        n: Window length in samples, odd.
+    """
     if n <= 1:
         return y
     k = np.ones(n) / n
@@ -167,9 +207,16 @@ def smooth(y, n):
 
 
 def accel_fit(t_imu, a_imu, t_fix, xyt, shift=0.0, smooth_s=0.4, min_acc=0.05):
-    """
-    psi (yaw of the IMU against base) and scale from accelerations. a_imu: (n, 2) gravity-free IMU ax, ay;
-    xyt: (m, 3) base pose (x, y, theta) in the target frame from the fixes. Returns (psi deg, scale, residual, n).
+    """Fit psi (the IMU's yaw against base_link) and a scale from accelerations.
+
+    Args:
+        t_imu: IMU stamps, in seconds.
+        a_imu: Gravity-free IMU (ax, ay), shape (n, 2), in m/s^2.
+        t_fix: Fix stamps, in seconds.
+        xyt: Base pose (x, y, theta) in the target frame from the fixes, shape (m, 3).
+        shift: Time added to the fix stamps to sample the IMU, in seconds.
+        smooth_s: Smoothing window, in seconds.
+        min_acc: Smallest camera acceleration a sample needs to count, in m/s^2.
     """
     rate = 1.0 / np.median(np.diff(t_fix))
     n = max(3, int(round(smooth_s * rate)) | 1)
@@ -197,7 +244,12 @@ def accel_fit(t_imu, a_imu, t_fix, xyt, shift=0.0, smooth_s=0.4, min_acc=0.05):
 
 
 def gravity_free(acc, quat):
-    """The IMU's ax, ay with gravity removed by its own roll and pitch (ekf_node, geometry.body_gravity_xy)."""
+    """Return the IMU's ax, ay with gravity removed by its own roll and pitch.
+
+    Args:
+        acc: IMU linear accelerations, one row per sample, in m/s^2.
+        quat: IMU orientation (x, y, z, w), one row per sample.
+    """
     x, y, z, w = quat.T
     gx, gy = 2.0 * GRAVITY * (x * z - w * y), 2.0 * GRAVITY * (y * z + w * x)
     return np.column_stack([acc[:, 0] - gx, acc[:, 1] - gy])

@@ -34,7 +34,19 @@ DISARM = b'S\n'
 
 @dataclass(frozen=True)
 class Telemetry:
-    """One decoded telemetry row. Fields are exactly what the Mega reported."""
+    """One decoded telemetry row, with every field exactly as the Mega reported it.
+
+    Args:
+        t_ms: Mega millis() at the last IMU sample [ms].
+        heading_rad: Continuous, unwrapped IMU yaw [rad].
+        yaw_rate_dps: Calibrated gyro Z rate [deg/s].
+        applied: Twist (vx, vy, wz) the chassis acted on, after saturation [m/s, m/s, rad/s].
+        flags: Status bitfield of FLAG_ARMED, FLAG_TIMEOUT and FLAG_SATURATED.
+        imu_resets: Count of spontaneous BNO085 resets.
+        bad_commands: Count of malformed command lines the Mega rejected.
+        requested: Last V the Mega accepted, before saturation; None from legacy firmware.
+        pulse_us: Pulse widths on channels lf, rf, lr, rr [us]; None from legacy firmware.
+    """
 
     t_ms: int
     heading_rad: float
@@ -63,12 +75,22 @@ class Telemetry:
 
 
 def is_header(line: str) -> bool:
-    """Report whether a line is a CSV header, of this firmware or any other."""
+    """Report whether a line is a CSV header, of this firmware or any other.
+
+    Args:
+        line: One received line.
+    """
     return line.strip().split(',', 1)[0] == 't_ms'
 
 
 def parse_line(line: str) -> Telemetry | None:
-    """Decode one telemetry row, or return None when the line is not one."""
+    """Decode one telemetry row, or return None when the line is not one.
+
+    Status lines, headers, blanks, wrong field counts and non-finite numbers all give None.
+
+    Args:
+        line: One received line, with or without its line ending.
+    """
     s = line.strip()
     if not s or s.startswith('#') or is_header(s):
         return None
@@ -96,7 +118,15 @@ def parse_line(line: str) -> Telemetry | None:
 
 
 def format_velocity(vx: float, vy: float, wz: float) -> bytes:
-    """Encode a body twist as a V line."""
+    """Encode a body twist as a V line.
+
+    Raise ValueError for a non-finite twist or a line over the firmware's length limit.
+
+    Args:
+        vx: Forward velocity [m/s].
+        vy: Leftward velocity [m/s].
+        wz: Yaw rate, anticlockwise positive [rad/s].
+    """
     if not all(math.isfinite(v) for v in (vx, vy, wz)):
         raise ValueError(f'non-finite twist: {vx}, {vy}, {wz}')
     line = f'V,{vx:.3f},{vy:.3f},{wz:.3f}\n'
@@ -106,14 +136,22 @@ def format_velocity(vx: float, vy: float, wz: float) -> bytes:
 
 
 def describe_flags(flags: int) -> str:
-    """Render the flags bitfield for a log line."""
+    """Render the flags bitfield for a log line.
+
+    Args:
+        flags: Telemetry status bitfield.
+    """
     names = [n for bit, n in ((FLAG_ARMED, 'ARMED'), (FLAG_TIMEOUT, 'TIMEOUT'),
                               (FLAG_SATURATED, 'SAT')) if flags & bit]
     return '|'.join(names) if names else 'DISARMED'
 
 
 class LineReader:
-    """Reassemble newline-terminated lines from arbitrary serial chunks."""
+    """Reassembler of newline-terminated lines from arbitrary serial chunks.
+
+    Args:
+        max_len: Longest partial line kept before it is dropped as noise [bytes].
+    """
 
     def __init__(self, max_len: int = 1024) -> None:
         self._buf = bytearray()
@@ -121,7 +159,11 @@ class LineReader:
         self.overruns = 0
 
     def feed(self, data: bytes) -> list[str]:
-        """Add received bytes and return whatever complete lines that produced."""
+        """Add received bytes and return whatever complete lines that produced.
+
+        Args:
+            data: Bytes read from the serial port.
+        """
         self._buf += data
         out: list[str] = []
         while True:

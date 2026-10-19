@@ -49,16 +49,26 @@ A_AMP_L1 = np.array([[1.0, 1.0, 0.0], [1.0, -1.0, 0.0], [-1.0, 1.0, 0.0], [-1.0,
 
 
 def f_c(x_c, u, Ts):
-    """Return the pose kinematics of report eq. 9 for x_c = [x, y, theta]."""
+    """Return the pose kinematics of report eq. 9 for x_c = [x, y, theta].
+
+    Args:
+        x_c: Pose [x, y, theta] in the target frame [m, m, rad].
+        u: Body-velocity command [u_b, v_b, r_b] [m/s, m/s, rad/s].
+        Ts: Sample time [s].
+    """
     c, s = math.cos(x_c[2]), math.sin(x_c[2])
     return x_c + Ts * np.array((u[0] * c - u[1] * s, u[0] * s + u[1] * c, u[2]))
 
 
 def linearise(x_c, u, Ts):
-    """
-    Return (A_k, B_k), 3x3 each, at the estimate and the last command (report eq. 10).
+    """Return (A_k, B_k), 3x3 each, at the estimate and the last command (report eq. 10).
 
-    mpc_linearise.m is the reference; both are held over the horizon.
+    Both are held over the horizon.
+
+    Args:
+        x_c: Estimated pose [x, y, theta] in the target frame.
+        u: Last body-velocity command [u_b, v_b, r_b].
+        Ts: Sample time [s].
     """
     c, s = math.cos(x_c[2]), math.sin(x_c[2])
     A = np.eye(3)
@@ -69,7 +79,12 @@ def linearise(x_c, u, Ts):
 
 
 def augment(A, B):
-    """Return (Ap, Bp), 6x6 and 6x3, of the incremental model x_p = [dx_c; x_c] (report eq. 11)."""
+    """Return (Ap, Bp), 6x6 and 6x3, of the model x_p = [dx_c; x_c] (report eq. 11).
+
+    Args:
+        A: State matrix A_k (3x3).
+        B: Input matrix B_k (3x3).
+    """
     Ap = np.zeros((6, 6))
     Ap[:3, :3] = A
     Ap[3:, :3] = A
@@ -78,7 +93,16 @@ def augment(A, B):
 
 
 def predict_matrices(Ap, Bp, Np, Nc):
-    """Return F (3Np x 6) and Phi (3Np x 3Nc), with Y = F x_p + Phi dU (report eq. 13)."""
+    """Return F (3Np x 6) and Phi (3Np x 3Nc), with Y = F x_p + Phi dU (report eq. 13).
+
+    Phi is block Toeplitz, so its Np blocks are formed once and copied down the block columns.
+
+    Args:
+        Ap: Augmented state matrix (6x6).
+        Bp: Augmented input matrix (6x3).
+        Np: Prediction horizon [steps].
+        Nc: Control horizon [steps].
+    """
     F = np.empty((3 * Np, 6))
     Phi = np.zeros((3 * Np, 3 * Nc))
     blocks = np.empty((Np, 3, 3))
@@ -93,7 +117,13 @@ def predict_matrices(Ap, Bp, Np, Nc):
 
 
 def _pattern(rows, cols, shape):
-    """Return a CSC matrix of ones on (rows, cols), and those positions in its data order."""
+    """Return a CSC matrix of ones on (rows, cols), and those positions in its data order.
+
+    Args:
+        rows: Row indices of the nonzeros.
+        cols: Column indices of the nonzeros.
+        shape: Shape of the matrix.
+    """
     M = sparse.csc_matrix((np.ones(len(rows)), (rows, cols)), shape=shape)
     M.sort_indices()
     return M, M.indices.copy(), np.repeat(np.arange(shape[1]), np.diff(M.indptr))
@@ -101,7 +131,17 @@ def _pattern(rows, cols, shape):
 
 @dataclass
 class MpcResult:
-    """One tick's output (brief Section 6, step 7)."""
+    """One tick's output from Mpc.step.
+
+    Args:
+        u: Body-velocity command [u_b, v_b, r_b].
+        du: The applied increment.
+        dU: The whole planned increment sequence (3Nc).
+        y_pred: Predicted outputs Y = F x_p + Phi dU, Np x 3.
+        slack: Slack of the soft output rows; nan on a fallback.
+        exit_flag: The solver's own code: DAQP exitflag or OSQP status_val.
+        fallback: Whether the solve failed and the command decelerates instead.
+    """
 
     u: np.ndarray
     du: np.ndarray
@@ -113,7 +153,12 @@ class MpcResult:
 
 
 class Mpc:
-    """Constants, the solver, and the per-tick step."""
+    """Docking MPC: the constants, the QP solver, and the per-tick step.
+
+    Args:
+        p: Parameters from params.load (the mpc, lim and geom sections).
+        solver: QP solver, 'daqp' or 'osqp'.
+    """
 
     def __init__(self, p, solver='daqp'):
         if solver not in SOLVERS:
@@ -171,7 +216,13 @@ class Mpc:
         self.z_prev = None
 
     def _constant_rows(self, a_amp):
-        """Return rows 0-199 of M, the 200 x 3Nc block whose left-hand side never changes."""
+        """Return rows 0-199 of M, the 200 x 3Nc block whose left-hand side never changes.
+
+        The increment, amplitude and wheel-speed rows, acting on dU through C2 = L_Nc kron I3.
+
+        Args:
+            a_amp: Amplitude rows for one step, A_AMP_AXIS or A_AMP_L1 (6x3).
+        """
         Nc = self.Nc
         C2 = np.kron(np.tril(np.ones((Nc, Nc))), np.eye(3))
         I_n = np.eye(3 * Nc)
@@ -180,7 +231,10 @@ class Mpc:
                           np.kron(np.eye(Nc), self.A_wheel) @ C2))
 
     def _setup_osqp(self):
-        """Create the one osqp.OSQP() with the fixed sparsity pattern (brief Section 6)."""
+        """Create the one osqp.OSQP() with the fixed sparsity pattern.
+
+        Index arrays in CSC data order let each tick hand OSQP its new values through update().
+        """
         import osqp
 
         n, m, k = self.n, self.m, self.wheel.stop
@@ -208,7 +262,18 @@ class Mpc:
         self.z_prev = None
 
     def constraints(self, Phi, Fx, u_prev, v_max, r_max, v_lat_max=None):
-        """Write this tick's M (320 x 3Nc) and gamma (320) and return them (report Section 3.4)."""
+        """Write this tick's M (320 x 3Nc) and gamma (320) and return them (report Section 3.4).
+
+        The returned arrays are views into the solver's working copies, valid until the next tick.
+
+        Args:
+            Phi: Prediction matrix (3Np x 3Nc).
+            Fx: Free response F x_p (3Np).
+            u_prev: Last command u(k-1) [u_b, v_b, r_b].
+            v_max: Translational speed cap [m/s].
+            r_max: Yaw-rate cap [rad/s].
+            v_lat_max: Cap on |v_b| apart from |u_b| with per-axis rows [m/s]; None uses v_max.
+        """
         n, Nc, A, u = self.n, self.Nc, self.A_ext, self.u_ext
         v_lat = v_max if v_lat_max is None or self.l1 else v_lat_max
         caps = np.array((v_max, v_max, v_lat, v_lat, r_max, r_max))
@@ -227,7 +292,21 @@ class Mpc:
 
     def step(self, x_hat, r_gyro, u_prev, y_ref, v_max, r_max, qw=None, l1_cap=False,
              v_lat_max=None):
-        """Run one tick and return an MpcResult (brief Section 6, steps 1-8)."""
+        """Run one tick: build and solve the QP, and return an MpcResult.
+
+        If the solve fails, each axis decelerates towards zero by its largest increment.
+
+        Args:
+            x_hat: Estimate [x, y, theta, vx, vy] in the target frame.
+            r_gyro: Measured yaw rate [rad/s].
+            u_prev: Last command u(k-1) [u_b, v_b, r_b].
+            y_ref: Pose reference [x, y, theta] in the target frame.
+            v_max: Translational speed cap [m/s].
+            r_max: Yaw-rate cap [rad/s].
+            qw: Tracking multipliers [x, y, theta] for this tick and after; None keeps the last.
+            l1_cap: Whether to cap |u_b| + |v_b| rather than each axis on its own.
+            v_lat_max: Cap on |v_b| apart from |u_b| with per-axis rows [m/s]; None uses v_max.
+        """
         n, Np, Nc, Ts = self.n, self.Np, self.Nc, self.Ts
         if qw is not None and not np.array_equal(qw, self.q_w):
             self.q_w = np.array(qw, dtype=float)
@@ -262,7 +341,10 @@ class Mpc:
                          slack=math.nan, exit_flag=flag, fallback=True)
 
     def _solve(self):
-        """Solve this tick's QP; return (z, exit flag), z None unless solved."""
+        """Solve this tick's QP; return (z, exit flag), z None unless solved.
+
+        DAQP takes the dense arrays; OSQP takes its pattern's values, scaled and warm-started.
+        """
         if self.solver_name == 'daqp':
             z, _, flag, _ = self.daqp.solve(self.E_ext, self.q_ext, self.A_ext,
                                             self.u_ext, self.l_ext)

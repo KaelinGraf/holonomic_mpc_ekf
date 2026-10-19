@@ -31,7 +31,7 @@ def test_crop_is_idempotent_on_a_prewindowed_frame():
 
 
 def test_crop_does_not_alias_its_input():
-    """read() hands the result to another thread; a view of a DMA buffer tears."""
+    """The crop is a copy, since read() hands it to another thread and a DMA-buffer view tears."""
     active = np.zeros(frames.ACTIVE, dtype=np.uint8)
     out = frames.crop_window(active)
     out[0, 0] = 255
@@ -185,7 +185,12 @@ def test_unpack_raw8_rejects_a_stride_narrower_than_the_image():
 
 
 def _pack_raw10(pixels: np.ndarray, stride: int) -> np.ndarray:
-    """Pack 10-bit pixels into MIPI RAW10, independently of the unpacker."""
+    """Pack 10-bit pixels into MIPI RAW10, independently of the unpacker.
+
+    Args:
+        pixels: 2-D uint16 array of 10-bit pixel values.
+        stride: Row length of the packed buffer [bytes].
+    """
     h, w = pixels.shape
     groups = (w + 3) // 4
     padded_px = np.zeros((h, groups * 4), dtype=np.uint16)

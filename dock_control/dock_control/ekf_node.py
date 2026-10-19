@@ -33,7 +33,8 @@ vouches for the solution: the first pose, poses fused in ACQUIRE, and the fix a
 re-anchor restarts from, so the filter starts wide where the two disagree.
 
 While docking is in ACQUIRE, a pose that fails the NIS gate is still fused, without
-the gate and with the solutions' disagreement in its noise (2026-10-13): the filter has only just started from what may be the wrong one of
+the gate and with the solutions' disagreement in its noise (2026-10-13): the filter
+has only just started from what may be the wrong one of
 two solutions, and must be free to move to the right one. One that passes is fused
 as anywhere else, with its own covariance (2026-10-14: fused wide every time, an
 ambiguous start 2.2 m out kept the lateral sd at 70 mm, and the supervisor's
@@ -175,12 +176,20 @@ class EkfNode(Node):
             self.publish_estimate(msg.header.stamp, t)
 
     def on_cmd(self, msg):
-        """Note when the robot was last told to move; zero (or no) commands mean it stands."""
+        """Note when the robot was last told to move; zero (or no) commands mean it stands.
+
+        Args:
+            msg: Command from cmd_vel (geometry_msgs/Twist).
+        """
         if max(abs(msg.linear.x), abs(msg.linear.y), abs(msg.angular.z)) > MOVING_CMD:
             self.last_motion = self.get_clock().now().nanoseconds * 1e-9
 
     def on_stage(self, msg):
-        """Estimate only while docking is armed: leaving IDLE restarts the filter."""
+        """Follow the docking stage: leaving IDLE restarts the filter, returning to it idles it.
+
+        Args:
+            msg: Stage from dock/stage (dock_msgs/DockStage).
+        """
         active = msg.stage != DockStage.IDLE
         if active and not self.active:
             self.restart()
@@ -203,7 +212,11 @@ class EkfNode(Node):
         self.rejected.clear()
 
     def measure_rate(self, t):
-        """Count IMU samples over each second of their stamps; warn when below imu.rate."""
+        """Count IMU samples over each second of their stamps; warn when below imu.rate.
+
+        Args:
+            t: Stamp of the IMU sample [s].
+        """
         if self.rate_t0 is None:
             self.rate_t0 = t
             return
@@ -218,7 +231,16 @@ class EkfNode(Node):
                     'but the supervisor will not start moving', throttle_duration_sec=5.0)
 
     def zero(self, msg, t, ax, ay, r):
-        """Average the stationary start-up window into the accelerometer offset (brief Section 5).
+        """Average the stationary start-up window into the accelerometer offset.
+
+        The gyro mean is logged, not subtracted.
+
+        Args:
+            msg: The IMU sample (sensor_msgs/Imu), checked for missing fields.
+            t: Stamp of the sample [s].
+            ax: Gravity-free acceleration along base_link x [m/s^2].
+            ay: Gravity-free acceleration along base_link y [m/s^2].
+            r: Yaw rate [rad/s].
         """
         if self.zero_t0 is None:
             self.zero_t0 = t
@@ -297,7 +319,13 @@ class EkfNode(Node):
         self.reanchors += 1
 
     def measure(self, pose):
-        """Run the chain on one PoseWithCovariance; return (z, R, roll, pitch, range)."""
+        """Run the chain on one PoseWithCovariance; return (z, R, roll, pitch, range).
+
+        None if the pose's covariance is unusable: a pose is never fused with a made-up noise.
+
+        Args:
+            pose: Board pose in the camera's optical frame, with its covariance.
+        """
         cov = np.array(pose.covariance).reshape(6, 6)
         if not (np.all(np.isfinite(cov)) and np.all(cov.diagonal() > 0.0)):
             return None
@@ -345,14 +373,30 @@ class EkfNode(Node):
 
 
 def planar_agree(a, b, sigmas=AGREE_SIGMAS):
-    """Whether two fixes (z, R, ...) agree on x, y and theta to within sigmas of a's own R."""
+    """Return whether two fixes agree on x, y and theta to within sigmas of a's own R.
+
+    Args:
+        a: Fix (z, R, ...) whose covariance sets the tolerance.
+        b: Fix (z, R, ...) to compare with it.
+        sigmas: Tolerance in standard deviations.
+    """
     d = b[0] - a[0]
     d[2] = wrap_pi(d[2])
     return bool(np.all(np.abs(d) <= sigmas * np.sqrt(np.diag(a[1]))))
 
 
 def resolve(ekf, candidates, ambiguous, t_capture, estimating):
-    """Pick the fix among a pose's usable solutions; return (fix, cov_valid, spread)."""
+    """Pick the fix among a pose's usable solutions; return (fix, cov_valid, spread).
+
+    spread is diag(d^2) of the two solutions' disagreement, zero for an unambiguous pose.
+
+    Args:
+        ekf: The filter, for the NIS of each solution.
+        candidates: List of (fix, cov_valid), the pipeline's first solution first.
+        ambiguous: Whether the pose is ambiguous.
+        t_capture: Capture time of the pose [s].
+        estimating: Whether the filter is armed and zeroed.
+    """
     fix, cov_valid = candidates[0]
     if estimating and ekf.initialised and len(candidates) > 1:
         nis = [ekf.nis(f[0], f[1], t_capture) for f, _ in candidates]
@@ -366,7 +410,13 @@ def resolve(ekf, candidates, ambiguous, t_capture, estimating):
 
 
 def fixes_agree(zs, tol_p, tol_th):
-    """Return whether each fix lies within tol_p [m] and tol_th [rad] of the one before it."""
+    """Return whether each fix lies within tol_p [m] and tol_th [rad] of the one before it.
+
+    Args:
+        zs: Fixes [x, y, theta] in the target frame, oldest first.
+        tol_p: Position tolerance [m].
+        tol_th: Heading tolerance [rad].
+    """
     for a, b in zip(zs, zs[1:]):
         if (abs(b[0] - a[0]) > tol_p or abs(b[1] - a[1]) > tol_p
                 or abs(wrap_pi(b[2] - a[2])) > tol_th):

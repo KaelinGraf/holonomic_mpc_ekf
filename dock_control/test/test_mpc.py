@@ -20,7 +20,7 @@ def _central_differences(fun, v, h=1e-6):
 
 
 def test_linearisation_matches_finite_differences(p):
-    """A_k and B_k agree with central differences of report eq. 9."""
+    """Check A_k and B_k against central differences of report eq. 9."""
     Ts = p['mpc']['Ts']
     A, B = linearise(X_C, U, Ts)
     assert np.allclose(A, _central_differences(lambda x: f_c(x, U, Ts), X_C), atol=1e-6)
@@ -28,7 +28,7 @@ def test_linearisation_matches_finite_differences(p):
 
 
 def test_prediction_matrices_match_brute_force_stepping(p):
-    """F and Phi reproduce stepping the incremental model of report eq. 11 by hand."""
+    """Check that F and Phi reproduce stepping the incremental model of report eq. 11 by hand."""
     Np, Nc = p['mpc']['Np'], p['mpc']['Nc']
     rng = np.random.default_rng(0)
     A = np.eye(3) + 0.01 * rng.normal(size=(3, 3))
@@ -47,11 +47,7 @@ def test_prediction_matrices_match_brute_force_stepping(p):
 
 @pytest.mark.parametrize('solver', ['daqp', 'osqp'])
 def test_unconstrained_tick_matches_closed_form(p, solver):
-    """
-    Check that, with the limits removed, a tick equals the closed form (report Table 3).
-
-    dU = (Phi' Q_bar Phi + R_bar)^-1 Phi' Q_bar (Y_r - F x_p), to the solver tolerance.
-    """
+    """Check that, with the limits removed, a tick equals the closed form (report Table 3)."""
     pytest.importorskip(solver)
     from dock_control.mpc import Mpc
     for key in ('a_max', 'alpha_max', 'w_max'):
@@ -101,9 +97,7 @@ def test_constrained_tick_respects_every_limit(p, solver):
 
 @pytest.mark.parametrize('solver', ['daqp', 'osqp'])
 def test_the_l1_cap_shares_the_speed_between_the_axes(p, solver):
-    """With l1_cap (FINAL, HOLD) |u_b| + |v_b| stays under the cap; per axis, the sum can exceed
-    it.
-    """
+    """Check that l1_cap keeps |u_b| + |v_b| under the cap, which per-axis rows can exceed."""
     pytest.importorskip(solver)
     from dock_control.mpc import Mpc
     mpc = Mpc(p, solver)
@@ -123,7 +117,7 @@ def test_the_l1_cap_shares_the_speed_between_the_axes(p, solver):
 
 
 def test_a_separate_lateral_cap_keeps_the_plunge_from_strafing(p):
-    """Keep the straight-in plunge from strafing: per-axis rows, |v_b| <= v_lat_max."""
+    """Check that per-axis rows with v_lat_max keep the straight-in plunge from strafing."""
     pytest.importorskip('daqp')
     from dock_control.mpc import Mpc
     mpc = Mpc(p)

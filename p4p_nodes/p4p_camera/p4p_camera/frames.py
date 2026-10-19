@@ -42,7 +42,14 @@ class FrameError(ValueError):
 
 
 def crop_window(frame: np.ndarray, crop_top: int = CROP_TOP) -> np.ndarray:
-    """Centre-crop the active area down to the 4:3 full-res window."""
+    """Centre-crop the active area down to the 4:3 full-res window, as a copy.
+
+    A frame that is already FULL height comes back copied but otherwise unchanged.
+
+    Args:
+        frame: Mono frame of shape ACTIVE or FULL (H, W).
+        crop_top: Rows dropped off the top of the active area.
+    """
     h, w = frame.shape[:2]
     if w != FULL[1]:
         raise FrameError(f'expected {FULL[1]} columns, got {w}')
@@ -57,14 +64,23 @@ def crop_window(frame: np.ndarray, crop_top: int = CROP_TOP) -> np.ndarray:
 
 
 def downscale(full: np.ndarray) -> np.ndarray:
-    """FULL -> STREAM by exactly SCALE, with INTER_AREA."""
+    """Downscale a FULL frame to STREAM by exactly SCALE, with INTER_AREA.
+
+    Args:
+        full: Mono frame of shape FULL (H, W).
+    """
     if full.shape[:2] != FULL:
         raise FrameError(f'expected a {FULL} frame, got {full.shape[:2]}')
     return cv2.resize(full, (STREAM[1], STREAM[0]), interpolation=cv2.INTER_AREA)
 
 
 def encode_png(frame: np.ndarray, level: int = 1) -> bytes:
-    """PNG-encode a mono frame losslessly."""
+    """PNG-encode a mono frame losslessly.
+
+    Args:
+        frame: 2-D uint8 mono frame.
+        level: PNG compression level, 0 to 9; it trades CPU for bytes, never quality.
+    """
     if frame.dtype != np.uint8:
         raise FrameError(f'expected uint8, got {frame.dtype}')
     if frame.ndim != 2:
@@ -77,7 +93,15 @@ def encode_png(frame: np.ndarray, level: int = 1) -> bytes:
 
 def scale_intrinsics(K: np.ndarray, scale: float = SCALE,
                      crop_top: int = CROP_TOP) -> np.ndarray:
-    """Map intrinsics from the active area to the streamed 640x480 frame."""
+    """Map intrinsics from the active area to the streamed 640x480 frame.
+
+    Focal lengths divide by scale; the principal point maps as (c + 0.5) / scale - 0.5.
+
+    Args:
+        K: 3x3 camera matrix at active-area resolution [px].
+        scale: Downscale factor from FULL to STREAM.
+        crop_top: Rows cropped off the top of the active area, which shift cy.
+    """
     K = np.asarray(K, dtype=np.float64)
     if K.shape != (3, 3):
         raise FrameError(f'expected a 3x3 camera matrix, got {K.shape}')
@@ -91,7 +115,12 @@ def scale_intrinsics(K: np.ndarray, scale: float = SCALE,
 
 
 def unpack_raw8(padded: np.ndarray, width: int) -> np.ndarray:
-    """Strip line padding from an 8-bit raw buffer."""
+    """Strip line padding from an 8-bit raw buffer.
+
+    Args:
+        padded: Raw buffer of shape (h, stride), stride in bytes.
+        width: Image width [px].
+    """
     if padded.ndim != 2:
         raise FrameError(f'expected a (h, stride) buffer, got shape {padded.shape}')
     if padded.shape[1] < width:
@@ -100,7 +129,12 @@ def unpack_raw8(padded: np.ndarray, width: int) -> np.ndarray:
 
 
 def unpack_raw10p(padded: np.ndarray, width: int) -> np.ndarray:
-    """MIPI RAW10 -> uint8, which is an exact >> 2 and costs no arithmetic."""
+    """Unpack MIPI RAW10 to uint8 by keeping each pixel's high byte, an exact >> 2.
+
+    Args:
+        padded: Packed RAW10 buffer of shape (h, stride), stride in bytes.
+        width: Image width [px].
+    """
     if padded.ndim != 2:
         raise FrameError(f'expected a (h, stride) buffer, got shape {padded.shape}')
     h, stride = padded.shape
@@ -114,7 +148,15 @@ def unpack_raw10p(padded: np.ndarray, width: int) -> np.ndarray:
 
 
 def pick_mode(sensor_modes, want=FULL, prefer_8bit: bool = True) -> dict:
-    """Choose the sensor mode to configure, from Picamera2.sensor_modes."""
+    """Choose the sensor mode to configure, from Picamera2.sensor_modes.
+
+    The chosen mode dict comes back with 'format_str' and 'crop_top' added.
+
+    Args:
+        sensor_modes: Mode dicts as Picamera2.sensor_modes lists them.
+        want: Window the mode must cover, (H, W) [px].
+        prefer_8bit: Rank 8-bit modes ahead of 10-bit ones.
+    """
     if not sensor_modes:
         raise FrameError('the camera reported no sensor modes at all')
 
@@ -163,7 +205,16 @@ def pick_mode(sensor_modes, want=FULL, prefer_8bit: bool = True) -> dict:
 
 def ros_stamp_ns(sensor_ns, now_ros_ns: int, now_boot_ns: int,
                  max_latency_s: float = 0.5):
-    """Back-date a ROS stamp to the sensor's capture time."""
+    """Back-date a ROS stamp to the sensor's capture time.
+
+    Return (stamp_ns, latency_s, trusted); an implausible latency gives now_ros_ns, untrusted.
+
+    Args:
+        sensor_ns: Sensor capture time on the capture clock [ns], or None.
+        now_ros_ns: ROS clock time now [ns].
+        now_boot_ns: Capture clock time now [ns], read alongside now_ros_ns.
+        max_latency_s: Largest plausible capture latency [s].
+    """
     if sensor_ns is None:
         return now_ros_ns, 0.0, False
     latency_ns = int(now_boot_ns) - int(sensor_ns)

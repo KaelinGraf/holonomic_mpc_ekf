@@ -16,7 +16,7 @@ import run_analytics as ra  # noqa: E402, I100
 
 
 def test_lag_and_gain_are_recovered():
-    """A drive that delivers 0.6x the command 150 ms late, with noise: the fit finds both."""
+    """Recover the 0.6x gain and the 150 ms lag of a noisy drive."""
     rng = np.random.default_rng(0)
     tc = np.arange(0.0, 20.0, 0.05)
     cmd = 0.1 * np.sign(np.sin(2 * np.pi * tc / 4.0))
@@ -60,7 +60,11 @@ def test_held_command_drops_to_zero_after_the_bridge_timeout():
 
 
 def stage_rows(spec):
-    """(stage, seconds) pairs to dock/stage rows at 20 Hz."""
+    """Build dock/stage rows at 20 Hz from (stage, seconds) pairs.
+
+    Args:
+        spec: (stage, seconds) pairs, in order.
+    """
     rows, t = [], 100.0
     for s, dur in spec:
         for _ in range(int(round(dur * 20))):
@@ -108,7 +112,7 @@ def test_each_change_of_nis_or_verdict_is_one_processed_fix():
 
 
 def test_old_telemetry_layout_is_decoded():
-    """A DriveTelemetry from before 876cd4a: CDR, header, mega_t_ms, two doubles, a twist, flags, two uint16."""
+    """Decode a DriveTelemetry in the legacy layout, with two doubles and two uint16 fields."""
     frame = b'base_link\x00'
     body = struct.pack('<iI', 1791863390, 500_000_000) + struct.pack('<I', len(frame)) + frame
     body += b'\x00' * (-len(body) % 4) + struct.pack('<I', 12345)

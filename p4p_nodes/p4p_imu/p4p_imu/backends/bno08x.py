@@ -32,7 +32,12 @@ _RESET_SIGNS = ('unprocessable batch', 'report found', 'is it enabled')
 
 
 class Bno08xBackend(ImuBackend):
-    """One BNO085 on one I2C bus, owned by the node's read thread."""
+    """One BNO085 on one I2C bus, owned by the node's read thread.
+
+    Args:
+        params: Settings; reads i2c_bus, i2c_address, sample_rate_hz (Hz), warmup_timeout (s).
+        logger: rclpy logger for status and warnings.
+    """
 
     name = 'bno08x'
 
@@ -96,7 +101,10 @@ class Bno08xBackend(ImuBackend):
         self._await_data()
 
     def stop(self) -> None:
-        """Release the sensor and the bus. Idempotent, and never raises."""
+        """Release the sensor and the bus.
+
+        Idempotent, and never raises.
+        """
         self._bno = None
         i2c, self._i2c = self._i2c, None
         if i2c is not None:
@@ -159,7 +167,11 @@ class Bno08xBackend(ImuBackend):
 
     @staticmethod
     def _classify(exc: Exception) -> ImuError:
-        """Decide whether a parse failure means a reset or a broken link."""
+        """Decide whether a parse failure means a reset or a broken link.
+
+        Args:
+            exc: Exception raised by the library while parsing reports.
+        """
         text = str(exc).lower()
         if isinstance(exc, KeyError) or any(s in text for s in _RESET_SIGNS):
             return ImuResetError(f'sensor appears to have reset: {exc!r}')

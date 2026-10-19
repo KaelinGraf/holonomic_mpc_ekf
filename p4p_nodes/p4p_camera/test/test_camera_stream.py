@@ -12,12 +12,16 @@ from p4p_camera.backends.mock import expected_stream_markers
 
 
 def _decode(msg):
-    """Decode as cv_bridge would: IMREAD_ANYCOLOR, no ANYDEPTH."""
+    """Decode a CompressedImage as cv_bridge does: IMREAD_ANYCOLOR, no ANYDEPTH.
+
+    Args:
+        msg: CompressedImage carrying a PNG.
+    """
     return cv2.imdecode(np.frombuffer(bytes(msg.data), np.uint8), cv2.IMREAD_ANYCOLOR)
 
 
 def test_publisher_qos_matches_the_inference_node(rig):
-    """The one that stops a silent link. Everything else assumes this passes."""
+    """The publisher's QoS matches the inference node's; a mismatch leaves the link silent."""
     rig.wait_for_images(1)
     rig.check_qos()
 
@@ -29,10 +33,7 @@ def test_format_string_is_exactly_what_consumers_expect(rig):
 
 
 def test_payload_decodes_to_a_two_dimensional_640x480_uint8_frame(rig):
-    """Guard inference._to_mono's assert: a 3-channel PNG would break it.
-
-    ndim == 2 is the clause that matters.
-    """
+    """The payload decodes to a 2-D frame, as inference._to_mono asserts."""
     msg = rig.wait_for_images(1)[0]
     img = _decode(msg)
     assert img is not None, 'the payload is not a decodable PNG'
@@ -72,7 +73,7 @@ def test_frames_differ_so_a_stuck_stream_cannot_pass(rig):
 
 
 def test_stream_sustains_its_configured_rate(make_rig):
-    """Bounded loosely: this has to survive QEMU and a loaded CI box."""
+    """The stream holds its configured rate, within bounds loose enough for QEMU and loaded CI."""
     rig = make_rig(frame_rate=10.0)
     rig.wait_for_images(1)
     rig.images.clear()
@@ -83,7 +84,7 @@ def test_stream_sustains_its_configured_rate(make_rig):
 
 
 def test_camera_info_is_published_at_the_stream_resolution(rig):
-    """K must live at 640x480 now, and this is where that becomes visible."""
+    """The published camera_info declares 640x480, the resolution the intrinsics belong to."""
     rig.wait_for_images(2)
     rig.spin(0.5)
     assert rig.infos, 'no camera_info published'
@@ -112,7 +113,7 @@ def test_sensor_timestamp_is_back_dated_by_the_capture_latency(make_rig):
 
 
 def test_stamping_with_the_ros_clock_can_be_forced(make_rig):
-    """use_sensor_timestamp:=false pins stamps to the clock at read, for debugging."""
+    """Setting use_sensor_timestamp to false stamps frames with the ROS clock at read."""
     rig = make_rig(mock_latency_ms=200.0, use_sensor_timestamp=False, frame_rate=10.0)
     msgs = rig.wait_for_images(3)
     now = rig.probe.get_clock().now().nanoseconds
@@ -139,7 +140,7 @@ def test_a_sensor_running_faster_than_frame_rate_does_not_raise_the_publish_rate
 
 
 def test_the_guard_does_not_throttle_a_correctly_paced_sensor(make_rig):
-    """The other half: the guard must be inert when the sensor behaves."""
+    """The surplus guard stays inert when the sensor keeps to frame_rate."""
     rig = make_rig(frame_rate=10.0)
     rig.spin(2.0)
     rig.check_qos()

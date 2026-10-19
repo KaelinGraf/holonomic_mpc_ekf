@@ -78,8 +78,12 @@ def launch(tmp_path, *args):
 
 
 def stop(proc):
-    """SIGINT to the launch alone. Without a terminal, ros2 launch passes one SIGINT on to each
-    process; a terminal's Ctrl-C reaches the whole group itself and launch then sends none.
+    """Send SIGINT to the launch process alone and return its exit code.
+
+    Signalling only the launch gives each node one SIGINT, where the whole group would get two.
+
+    Args:
+        proc: The ros2 launch process.
     """
     if proc.poll() is None:
         proc.send_signal(signal.SIGINT)
@@ -92,8 +96,13 @@ def stop(proc):
 
 
 def events(tmp_path):
-    """(event, executable) in launch order, from the launch's own log, which has no discovery cache that can still
-    hold a node from the previous test, as the ROS graph does."""
+    """Return the (event, executable) pairs in launch order, from the launch's own log.
+
+    Unlike the ROS graph, the log has no discovery cache still holding an earlier test's node.
+
+    Args:
+        tmp_path: Test directory holding launch.log.
+    """
     markers = (('process started with pid', 'start'), ('process has finished cleanly', 'done'),
                ('process has died', 'died'))
     out = []

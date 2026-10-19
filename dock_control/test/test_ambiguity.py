@@ -37,7 +37,7 @@ def _running(p):
 
 
 def test_the_solution_with_the_smaller_nis_is_fused_and_still_gated(p):
-    """Whichever comes first, the one nearer the estimate is chosen; update gates the far one."""
+    """Check that the solution nearer the estimate is chosen, in either order, and still gated."""
     ekf, t = _running(p), 10 / 150.0
     near, far = _fix(-0.5, 0.001, 0.2), _fix(-0.5, 0.0, 6.0)
     chosen, valid, _ = ekf_node.resolve(ekf, [(far, True), (near, False)], True, t, True)
@@ -50,7 +50,7 @@ def test_the_solution_with_the_smaller_nis_is_fused_and_still_gated(p):
 
 
 def test_an_ambiguous_pose_starts_the_filter_from_its_first_solution(p):
-    """Agreeing or not, the first solution starts it; the spread says where the two disagree."""
+    """Check that the first solution starts the filter and the spread holds the disagreement."""
     ekf = Ekf(p)
     first = _fix(-0.8, 0.05, 3.0)
     disagrees = _fix(-0.8, 0.12, 9.0)
@@ -85,7 +85,7 @@ def node():
 
 
 def test_the_imu_yaw_turns_its_accelerations_into_base_link(node):
-    """imu.yaw_deg (the IMU turned against the camera's axes) rotates each gravity-free sample."""
+    """Check that imu.yaw_deg rotates each gravity-free sample into base_link."""
     from sensor_msgs.msg import Imu
     yaw = math.radians(node.p['imu'].get('yaw_deg', 0.0))
     assert np.isclose(math.atan2(node.imu_s, node.imu_c), yaw)
@@ -111,7 +111,12 @@ def _pose(T_OM, msg_pose):
 
 
 def _ambiguous_result(node, turn_alt):
-    """Return an ambiguous result 0.6 m back, its second solution turned by turn_alt (3-vector)."""
+    """Return an ambiguous result 0.6 m back, its second solution turned by turn_alt (3-vector).
+
+    Args:
+        node: The EkfNode, whose fiducial chain places the board.
+        turn_alt: Rotation vector of the second solution about the board centre [rad].
+    """
     from convchart_interfaces.msg import RosInferenceResult
     chain = node.chain
     T_T_board = chain.T_TM @ se3(R_UPRIGHT, -R_UPRIGHT @ chain.c_M)
@@ -129,7 +134,7 @@ def _ambiguous_result(node, turn_alt):
 
 
 def test_on_pose_publishes_an_ambiguous_fix_when_idle_and_starts_from_the_first(node):
-    """Publish an ambiguous fix when idle; once armed, start from the first solution."""
+    """Check that an ambiguous fix is published when idle and, once armed, starts the filter."""
     assert isinstance(node.chain, FiducialChain)
     node.on_pose(_ambiguous_result(node, (0.0, 0.0, 0.0)))
     assert len(node.fixes) == 1 and node.fixes[0][1] and not node.ekf.initialised
@@ -140,7 +145,7 @@ def test_on_pose_publishes_an_ambiguous_fix_when_idle_and_starts_from_the_first(
 
 
 def test_an_ambiguous_fix_keeps_its_own_noise_and_reports_the_disagreement(p):
-    """The chosen solution keeps its own covariance; the squared gap comes back on its own."""
+    """Check that the chosen fix keeps its covariance and the squared gap comes back separately."""
     ekf = _running(p)
     a, b = _fix(-0.5, 0.0, 0.0), _fix(-0.48, 0.0, 5.0)
     fix, _, spread = ekf_node.resolve(ekf, [(a, True), (b, True)], True, 10 / 150.0, True)
@@ -151,7 +156,7 @@ def test_an_ambiguous_fix_keeps_its_own_noise_and_reports_the_disagreement(p):
 
 
 def test_a_gated_ambiguous_solution_is_fused_with_its_own_covariance(node):
-    """Once moving, the solution that passes the gate is fused with its own covariance."""
+    """Check that, once moving, the solution that passes the gate keeps its own covariance."""
     node.active = node.zeroed = True
     node.on_pose(_ambiguous_result(node, (0.0, math.radians(8.0), 0.0)))
     assert node.ekf.P[2, 2] > math.radians(1.0) ** 2
@@ -177,7 +182,15 @@ def test_fixes_agree_compares_each_with_the_one_before():
 
 
 def _result_at(node, x, y, theta_deg, t):
-    """Return an unambiguous result for the robot at (x, y, theta) in the target frame at t [s]."""
+    """Return an unambiguous result for the robot at (x, y, theta) in the target frame at t [s].
+
+    Args:
+        node: The EkfNode, whose fiducial chain places the board.
+        x: Robot x in the target frame [m].
+        y: Robot y in the target frame [m].
+        theta_deg: Robot heading in the target frame [deg].
+        t: Capture time [s].
+    """
     from convchart_interfaces.msg import RosInferenceResult
     chain = node.chain
     T_T_board = chain.T_TM @ se3(R_UPRIGHT, -R_UPRIGHT @ chain.c_M)
@@ -189,7 +202,7 @@ def _result_at(node, x, y, theta_deg, t):
 
 
 def test_the_filter_re_anchors_after_rejected_fixes_that_agree(node):
-    """A 15 mm, 3 deg jump (a bump at the dock): five gated fixes that agree restart the filter."""
+    """Check that five gated fixes that agree, after a 15 mm, 3 deg jump, restart the filter."""
     node.chain.var_th_floor = 0.0
     node.active = node.zeroed = True
     node.on_pose(_result_at(node, -0.6, 0.0, 0.0, 100.0))
@@ -203,11 +216,7 @@ def test_the_filter_re_anchors_after_rejected_fixes_that_agree(node):
 
 
 def test_with_the_heading_floor_a_bump_at_the_dock_is_fused_not_re_anchored(node):
-    """
-    The same 15 mm, 3 deg jump passes the gate once a fix's heading noise is at least 1 deg.
-
-    Before the floor the fixes claimed about 0.2 deg, and 3 deg alone failed the gate.
-    """
+    """Check that a 15 mm, 3 deg jump is fused, not re-anchored, with the heading-noise floor."""
     node.active = node.zeroed = True
     node.on_pose(_result_at(node, -0.6, 0.0, 0.0, 100.0))
     node.on_pose(_result_at(node, -0.6, 0.015, 3.0, 100.0 + 1 / 15.0))
@@ -215,7 +224,7 @@ def test_with_the_heading_floor_a_bump_at_the_dock_is_fused_not_re_anchored(node
 
 
 def test_scattered_rejected_fixes_do_not_re_anchor(node):
-    """Fixes that disagree with each other as much as with the filter are outliers: no restart."""
+    """Check that rejected fixes that disagree with each other do not restart the filter."""
     node.active = node.zeroed = True
     node.on_pose(_result_at(node, -0.6, 0.0, 0.0, 100.0))
     for k in range(1, 2 * ekf_node.REANCHOR_AFTER):
@@ -225,7 +234,7 @@ def test_scattered_rejected_fixes_do_not_re_anchor(node):
 
 
 def test_while_acquiring_a_pose_is_fused_without_the_gate(node):
-    """In ACQUIRE the filter may move to the other solution; once moving, the gate is back."""
+    """Check that ACQUIRE fuses a pose without the gate, and the gate returns after ACQUIRE."""
     node.active = node.zeroed = True
     node.acquiring = True
     node.on_pose(_result_at(node, -0.6, 0.0, 0.0, 100.0))
@@ -238,7 +247,7 @@ def test_while_acquiring_a_pose_is_fused_without_the_gate(node):
 
 
 def test_in_acquire_a_solution_that_passes_the_gate_keeps_its_own_covariance(node):
-    """In ACQUIRE an ambiguous pose's nearer solution is fused narrow when it passes the gate."""
+    """Check that in ACQUIRE a solution that passes the gate is fused with its own covariance."""
     node.active = node.zeroed = True
     node.acquiring = True
     node.on_pose(_ambiguous_result(node, (0.0, math.radians(8.0), 0.0)))

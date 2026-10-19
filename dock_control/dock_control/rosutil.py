@@ -5,7 +5,14 @@ from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 
 
 def run(*node_types, args=None):
-    """Construct node_types and spin them in one single-threaded executor until shutdown."""
+    """Construct node_types and spin them in one single-threaded executor until shutdown.
+
+    Single-threaded so that the EKF's IMU and fix callbacks never overlap.
+
+    Args:
+        *node_types: Node classes, each constructed without arguments.
+        args: Command-line arguments for rclpy.init.
+    """
     rclpy.init(args=args)
     executor = SingleThreadedExecutor()
     nodes = []
@@ -23,5 +30,9 @@ def run(*node_types, args=None):
 
 
 def seconds(stamp):
-    """Convert a builtin_interfaces/Time to float seconds, at 0.24 us resolution today."""
+    """Convert a builtin_interfaces/Time to float seconds.
+
+    Args:
+        stamp: The time stamp.
+    """
     return stamp.sec + stamp.nanosec * 1e-9

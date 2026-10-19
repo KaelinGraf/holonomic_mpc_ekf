@@ -20,29 +20,44 @@ BACKENDS = {
 
 
 class CameraError(RuntimeError):
-    """The camera could not be opened, configured or read."""
+    """Error raised when the camera cannot be opened, configured or read."""
 
 
 class CameraBackend(abc.ABC):
-    """One camera, owned by one thread."""
+    """Interface to one camera, owned by one thread.
+
+    Only the node's capture thread ever calls start, read or stop.
+    """
 
     name: str = 'backend'
 
     @abc.abstractmethod
     def start(self) -> None:
-        """Open and configure the camera, and begin streaming."""
+        """Open and configure the camera, and begin streaming, raising CameraError on failure."""
 
     @abc.abstractmethod
     def read(self, timeout_s: float) -> tuple[np.ndarray, int | None]:
-        """Return one frames.FULL uint8 frame and its capture time."""
+        """Return one frames.FULL uint8 frame and its capture time.
+
+        The frame is a copy the caller owns; the time is CLOCK_BOOTTIME [ns], or None.
+
+        Args:
+            timeout_s: Longest wait for a frame before TimeoutError [s].
+        """
 
     @abc.abstractmethod
     def stop(self) -> None:
-        """Release the camera."""
+        """Release the camera; idempotent, and never raises."""
 
 
 def make_backend(name: str, params: dict, logger) -> CameraBackend:
-    """Instantiate a backend by name, importing its module lazily."""
+    """Instantiate a backend by name, importing its module lazily.
+
+    Args:
+        name: Backend name, a key of BACKENDS.
+        params: Backend settings collected from the node's parameters.
+        logger: rclpy logger for the backend to report through.
+    """
     try:
         module_name, class_name = BACKENDS[name]
     except KeyError:

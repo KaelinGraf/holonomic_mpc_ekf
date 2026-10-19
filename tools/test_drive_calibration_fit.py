@@ -17,7 +17,7 @@ import drive_calibration_fit as fit  # noqa: E402, I100
 
 
 def test_steps_are_runs_of_one_axis():
-    """Single-axis runs long enough count; zeros, mixed axes and short blips do not."""
+    """Count long single-axis runs as steps, and not zeros, mixed axes or short blips."""
     t = np.arange(0.0, 10.0, 0.02)
     cmd = np.zeros((len(t), 4))
     cmd[:, 0] = t
@@ -40,5 +40,5 @@ def test_the_dead_zone_fit_is_exact_on_clean_data():
 
 
 def test_a_simulated_run_is_recovered():
-    """The --selftest chassis: a 45 us pulse deadband, 80% strafe, a 0.19 m turn radius."""
+    """Recover the --selftest chassis: a 45 us pulse deadband, 80% strafe, a 0.19 m turn radius."""
     fit.selftest()

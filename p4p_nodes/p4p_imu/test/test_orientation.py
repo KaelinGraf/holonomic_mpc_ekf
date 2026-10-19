@@ -15,7 +15,12 @@ GOOD = ImuSample(accel=(0.1, -0.2, 9.8), gyro=(0.0, 0.0, 0.5),
 
 
 def _qmul(a, b):
-    """Hamilton product of two (w, x, y, z) quaternions."""
+    """Return the Hamilton product of two (w, x, y, z) quaternions.
+
+    Args:
+        a: Left-hand quaternion as (w, x, y, z).
+        b: Right-hand quaternion as (w, x, y, z).
+    """
     aw, ax, ay, az = a
     bw, bx, by, bz = b
     return (aw * bw - ax * bx - ay * by - az * bz,
@@ -25,7 +30,11 @@ def _qmul(a, b):
 
 
 def _yaw_by_rotating_x(quat):
-    """Yaw as the azimuth of the rotated +x axis, via explicit quaternion algebra."""
+    """Return yaw as the azimuth of the rotated +x axis, via explicit quaternion algebra.
+
+    Args:
+        quat: Quaternion as (i, j, k, real).
+    """
     i, j, k, real = quat
     q = (real, i, j, k)
     conj = (real, -i, -j, -k)
@@ -34,7 +43,7 @@ def _yaw_by_rotating_x(quat):
 
 
 def test_a_quarter_turn_about_z_reads_as_ninety_degrees():
-    """Pins the (i, j, k, real) ordering the Adafruit library returns."""
+    """Check that a quarter turn about z reads as pi/2, pinning the (i, j, k, real) order."""
     quat = (0.0, 0.0, math.sin(math.pi / 4), math.cos(math.pi / 4))
     assert orientation.yaw_from_quaternion(quat) == pytest.approx(math.pi / 2)
 
@@ -54,7 +63,7 @@ def test_yaw_round_trips_through_the_quaternion(yaw):
     (0.3, 0.0, 1.0), (0.0, 0.4, -2.0), (-0.2, 0.25, 2.5),
 ])
 def test_yaw_is_the_zyx_yaw_even_when_the_board_is_not_level(roll, pitch, yaw):
-    """The flat-mount assumption broken: roll and pitch must not leak into yaw."""
+    """Check that roll and pitch from a board that is not level do not leak into yaw."""
     cr, sr = math.cos(roll / 2), math.sin(roll / 2)
     cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
     cy, sy = math.cos(yaw / 2), math.sin(yaw / 2)
@@ -67,14 +76,14 @@ def test_yaw_is_the_zyx_yaw_even_when_the_board_is_not_level(roll, pitch, yaw):
 
 
 def test_a_slightly_long_quaternion_is_scaled_rather_than_rejected():
-    """The BNO's Q14 fixed point lands just off unit length; that is not an error."""
+    """Check that a quaternion just off unit length is scaled to unit length, not rejected."""
     quat = orientation.normalise_quaternion((0.0, 0.0, 0.01, 1.01))
     assert quat is not None
     assert math.sqrt(sum(c * c for c in quat)) == pytest.approx(1.0)
 
 
 def test_a_zero_quaternion_has_no_direction():
-    """The vendor library's placeholder. Normalising it would invent a heading."""
+    """Check that the library's zero-quaternion placeholder has no direction."""
     assert orientation.normalise_quaternion((0.0, 0.0, 0.0, 0.0)) is None
 
 
@@ -87,29 +96,28 @@ def test_a_real_sample_is_valid():
 
 
 def test_the_libraries_placeholder_sample_is_rejected():
-    """enable_feature() returns carrying exactly this; publishing it would fabricate
-    a yaw of 0 and claim the bot is in free fall."""
+    """Check that the library's all-zero placeholder sample fails validation."""
     placeholder = ImuSample(accel=(0.0, 0.0, 0.0), gyro=(0.0, 0.0, 0.0),
                             quat=(0.0, 0.0, 0.0, 0.0))
     assert orientation.validate(placeholder) is not None
 
 
 def test_exactly_zero_acceleration_is_rejected():
-    """A stationary accelerometer reads gravity, so a true zero means not streaming."""
+    """Check that exactly zero acceleration fails validation as a sensor not streaming."""
     sample = ImuSample(accel=(0.0, 0.0, 0.0), gyro=GOOD.gyro, quat=GOOD.quat)
     assert 'exactly zero' in orientation.validate(sample)
 
 
 @pytest.mark.parametrize('field', ['accel', 'gyro', 'quat'])
 def test_a_nan_anywhere_is_rejected(field):
-    """A NaN would poison a filter without ever raising."""
+    """Check that a NaN in any of the three vectors fails validation."""
     parts = {'accel': GOOD.accel, 'gyro': GOOD.gyro, 'quat': GOOD.quat}
     parts[field] = tuple([float('nan')] + list(parts[field])[1:])
     assert 'non-finite' in orientation.validate(ImuSample(**parts))
 
 
 def test_the_same_sample_twice_carries_nothing_new():
-    """How a silent reset shows up: the library serves its cache forever."""
+    """Check that a repeated sample, as a silent reset serves it, carries nothing new."""
     assert not orientation.samples_differ(GOOD, GOOD)
 
 
@@ -129,9 +137,7 @@ def test_covariance_is_row_major_diagonal():
 
 
 def test_covariance_never_emits_the_not_measured_sentinel():
-    """REGRESSION. p4p_serial_bridge set linear_acceleration_covariance[0] = -1.0 because the Mega
-    never sent acceleration.
-    """
+    """Check that a covariance never contains the -1.0 not-measured sentinel."""
     for cov in (orientation.covariance(1e6, 1e6, 0.01),
                 orientation.covariance(1e-4, 1e-4, 1e-4),
                 orientation.covariance(0.01, 0.01, 0.01)):
@@ -140,7 +146,7 @@ def test_covariance_never_emits_the_not_measured_sentinel():
 
 
 def test_a_re_zeroed_heading_is_not_explained_by_the_gyro():
-    """The signature of a spontaneous BNO085 reset."""
+    """Check that a re-zeroed heading with a quiet gyro, as after a reset, is unexplained."""
     assert not orientation.explains_jump(2.0, 0.0, 0.1, 0.01, 0.35)
 
 
@@ -149,12 +155,12 @@ def test_a_fast_but_consistent_turn_is_explained():
 
 
 def test_crossing_pi_is_explained_rather_than_read_as_a_jump():
-    """remainder(), not fmod(): the step has to be the shortest arc."""
+    """Check that crossing pi is measured on the shortest arc and not read as a jump."""
     assert orientation.explains_jump(3.13, -3.13, 2.0, 0.01, 0.35)
 
 
 def test_without_a_time_base_we_stay_quiet():
-    """dt <= 0 happens on the first sample; crying wolf there would be noise."""
+    """Check that dt <= 0, as on the first sample, never reports a jump."""
     assert orientation.explains_jump(2.0, 0.0, 0.0, 0.0, 0.35)
 
 

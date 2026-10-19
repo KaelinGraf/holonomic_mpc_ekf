@@ -21,12 +21,12 @@ def test_samples_arrive_at_all(rig):
 
 
 def test_the_frame_is_base_link(rig):
-    """What the serial bridge used for this same data."""
+    """Check that published samples carry frame_id base_link."""
     assert rig.wait_for_samples(1)[0].header.frame_id == 'base_link'
 
 
 def test_the_quaternion_is_unit_length(rig):
-    """Consumers are entitled to assume this; the BNO's Q14 output is only close."""
+    """Check that every published orientation quaternion has unit length."""
     for msg in rig.wait_for_samples(10):
         assert math.sqrt(sum(c * c for c in _quat(msg))) == pytest.approx(1.0, abs=1e-6)
 
@@ -38,24 +38,21 @@ def test_stamps_advance(rig):
 
 
 def test_the_turn_rate_reaches_angular_velocity_z(make_rig):
-    """mock_yaw_rate goes in, angular_velocity.z comes out: the node is not
-    dropping or reordering the gyro vector."""
+    """Check that the mock turn rate arrives unchanged in angular_velocity.z."""
     rig = make_rig(mock_yaw_rate=1.25, mock_noise=0.0)
     for msg in rig.wait_for_samples(5):
         assert msg.angular_velocity.z == pytest.approx(1.25, abs=1e-6)
 
 
 def test_acceleration_is_published_with_gravity_in_z(make_rig):
-    """BNO_REPORT_ACCELEROMETER, not LINEAR_ACCELERATION: sensor_msgs/Imu
-    specifies linear_acceleration as including gravity."""
+    """Check that linear_acceleration includes gravity in +z, as sensor_msgs/Imu specifies."""
     rig = make_rig(mock_noise=0.0)
     msg = rig.wait_for_samples(1)[0]
     assert msg.linear_acceleration.z == pytest.approx(9.80665, abs=1e-6)
 
 
 def test_heading_wraps_at_pi_and_nothing_unwraps_it(make_rig):
-    """The accepted cost of publishing sensor_msgs/Imu alone. Asserted rather
-    than assumed, so that the limitation stays documented in behaviour."""
+    """Check that the published heading wraps at pi and arrives without unwrapping."""
     rig = make_rig(mock_yaw_rate=4.0, mock_noise=0.0)
     yaws = [orientation.yaw_from_quaternion(_quat(m)) for m in rig.wait_for_samples(300)]
     assert all(-math.pi <= y <= math.pi for y in yaws)
@@ -72,9 +69,7 @@ def test_every_covariance_is_populated(make_rig):
 
 
 def test_no_covariance_carries_the_not_measured_sentinel(rig):
-    """REGRESSION. p4p_serial_bridge set linear_acceleration_covariance[0] = -1.0 because the Mega
-    never sent acceleration.
-    """
+    """Check that no published covariance carries the -1.0 not-measured sentinel."""
     msg = rig.wait_for_samples(1)[0]
     for name in ('orientation_covariance', 'angular_velocity_covariance',
                  'linear_acceleration_covariance'):
@@ -84,8 +79,7 @@ def test_no_covariance_carries_the_not_measured_sentinel(rig):
 
 
 def test_roll_and_pitch_are_flagged_uncharacterised_not_unmeasured(rig):
-    """1e6 on the diagonal says "do not trust this yet". The sentinel for genuinely
-    unmeasured is -1.0 in element 0, which would condemn the whole quaternion."""
+    """Check that roll and pitch carry a large 1e6 variance rather than the -1.0 sentinel."""
     cov = list(rig.wait_for_samples(1)[0].orientation_covariance)
     assert cov[0] == 1e6 and cov[4] == 1e6
     assert cov[8] < 1.0

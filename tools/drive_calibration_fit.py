@@ -53,7 +53,14 @@ FLAG_ARMED, FLAG_TIMEOUT, FLAG_SATURATED = 0x01, 0x02, 0x04
 
 @dataclass(frozen=True)
 class Firmware:
-    """config.h as flashed, for working out pulses the telemetry did not report."""
+    """Firmware constants as flashed, for working out pulses the telemetry does not report.
+
+    Args:
+        wheel_max_mps: WHEEL_MAX_MPS, the wheel speed at the full pulse span, in m/s.
+        l_plus_w: CHASSIS_L_PLUS_W, the turn lever, in m.
+        strafe_gain: STRAFE_GAIN, the multiplier on sideways commands.
+        span_us: MOTOR_US_MAX - MOTOR_US_NEUTRAL, in us.
+    """
 
     wheel_max_mps: float = 0.50
     l_plus_w: float = 0.1655
@@ -61,7 +68,12 @@ class Firmware:
     span_us: float = 800.0
 
     def pulse_offset(self, axis: str, cmd: float) -> float:
-        """Distance of every wheel's pulse from neutral for a single-axis command [us]."""
+        """Return every wheel's pulse distance from neutral for a single-axis command, in us.
+
+        Args:
+            axis: Commanded axis: 'x', 'y' or 'r'.
+            cmd: Command on that axis, in m/s or rad/s.
+        """
         per = {'x': 1.0, 'y': self.strafe_gain, 'r': self.l_plus_w}[axis]
         return min(abs(cmd) * per / self.wheel_max_mps, 1.0) * self.span_us
 
@@ -101,7 +113,11 @@ def stamp(m) -> float:
 
 
 def read_bag(path: Path) -> dict:
-    """Read the bag's cmd_vel, fixes, gyro and telemetry into arrays (see measure())."""
+    """Read the bag's cmd_vel, fixes, gyro and telemetry into arrays keyed cmd, fix, imu and tel.
+
+    Args:
+        path: Bag directory.
+    """
     import rosbag2_py
     from rclpy.serialization import deserialize_message
     from rosidl_runtime_py.utilities import get_message
@@ -144,7 +160,13 @@ def read_bag(path: Path) -> dict:
 
 
 def find_steps(cmd: np.ndarray, min_s: float = 0.5, gap_s: float = 0.25) -> list[Step]:
-    """Return the runs of one command on one axis, min_s or longer, in cmd_vel (t, vx, vy, wz)."""
+    """Return the runs of one command on one axis that last min_s or longer.
+
+    Args:
+        cmd: cmd_vel rows (t, vx, vy, wz).
+        min_s: Shortest run that counts, in seconds.
+        gap_s: Longest gap between messages within a run, in seconds.
+    """
     steps, i, n = [], 0, len(cmd)
     while i < n:
         j = i + 1
@@ -161,7 +183,13 @@ def find_steps(cmd: np.ndarray, min_s: float = 0.5, gap_s: float = 0.25) -> list
 
 
 def still_spells(cmd: np.ndarray, after_s: float = 1.0, min_s: float = 0.8) -> list:
-    """Return (t0, t1) of the zero-command spells, from after_s in (once the robot stopped)."""
+    """Return (t0, t1) of the zero-command spells, starting after_s in, once the robot has stopped.
+
+    Args:
+        cmd: cmd_vel rows (t, vx, vy, wz).
+        after_s: Time left out at the start of each spell, in seconds.
+        min_s: Shortest spell that counts, in seconds.
+    """
     spells, i, n = [], 0, len(cmd)
     while i < n:
         j = i + 1
@@ -176,7 +204,12 @@ def still_spells(cmd: np.ndarray, after_s: float = 1.0, min_s: float = 0.8) -> l
 
 
 def robust_slope(t: np.ndarray, y: np.ndarray) -> float:
-    """Slope of a straight line through (t, y), refitted once without points 3 MADs off it."""
+    """Return the slope of a line through (t, y), refitted once without points 3 MADs off it.
+
+    Args:
+        t: Sample times.
+        y: Sample values.
+    """
     if len(t) < 3 or np.ptp(t) <= 0:
         return math.nan
     tc = t - t.mean()
@@ -189,7 +222,14 @@ def robust_slope(t: np.ndarray, y: np.ndarray) -> float:
 
 
 def fix_motion(fix: np.ndarray, t0: float, t1: float, min_clear: int = 5):
-    """Return (n, used ambiguous, forward, left, heading rate) from the fixes in [t0, t1]."""
+    """Return (n, used ambiguous, forward, left, heading rate) from the fixes in [t0, t1].
+
+    Args:
+        fix: Fix rows (t, x, y, theta, ambiguous, range).
+        t0: Start of the window, in seconds.
+        t1: End of the window, in seconds.
+        min_clear: Fewest unambiguous fixes that are used on their own.
+    """
     sel = fix[(fix[:, 0] >= t0) & (fix[:, 0] <= t1)]
     clear = sel[sel[:, 4] == 0]
     used_amb = len(clear) < min_clear
@@ -204,7 +244,14 @@ def fix_motion(fix: np.ndarray, t0: float, t1: float, min_clear: int = 5):
 
 
 def measure(steps: list[Step], d: dict, fw: Firmware, settle: float) -> dict:
-    """Fill each step's measurements in place; return the still spells' statistics."""
+    """Fill in each step's measurements and return the still spells' statistics.
+
+    Args:
+        steps: Steps to measure, updated in place.
+        d: Bag arrays from read_bag.
+        fw: Firmware constants, for pulses the telemetry does not report.
+        settle: Time left out at the start of each step, in seconds.
+    """
     imu, fix, tel = d['imu'], d['fix'], d['tel']
     spells = still_spells(d['cmd'])
     still = [imu[(imu[:, 0] >= a) & (imu[:, 0] <= b), 1] for a, b in spells]
@@ -255,7 +302,12 @@ def measure(steps: list[Step], d: dict, fw: Firmware, settle: float) -> dict:
 
 
 def deadzone_fit(c: np.ndarray, s: np.ndarray):
-    """Fit s = g * max(c - d, 0) for c >= 0, 0 <= d < max(c). Returns (d, g, rms), or None."""
+    """Fit s = g * max(c - d, 0) for c >= 0, 0 <= d < max(c), returning (d, g, rms) or None.
+
+    Args:
+        c: Command magnitudes.
+        s: Responses.
+    """
     if len(c) < 2 or c.max() <= 0:
         return None
     best = None
@@ -269,7 +321,12 @@ def deadzone_fit(c: np.ndarray, s: np.ndarray):
 
 
 def line_fit(c: np.ndarray, s: np.ndarray):
-    """Fit s = offset + gain * c; (offset, gain), or None with fewer than two distinct c."""
+    """Fit s = offset + gain * c, returning (offset, gain) or None with under two distinct c.
+
+    Args:
+        c: Commands.
+        s: Responses.
+    """
     if len(np.unique(c)) < 2:
         return None
     gain, offset = np.polyfit(c, s, 1)
@@ -277,7 +334,12 @@ def line_fit(c: np.ndarray, s: np.ndarray):
 
 
 def fit_axis(steps: list[Step], thr: float) -> dict:
-    """Fit one axis's usable steps in command space and in pulse space."""
+    """Fit one axis's usable steps in command space and in pulse space.
+
+    Args:
+        steps: Steps on the axis.
+        thr: Smallest response counted as motion, in m/s or rad/s.
+    """
     st = [s for s in steps if s.usable]
     if not st:
         return {}
@@ -298,7 +360,12 @@ def fit_axis(steps: list[Step], thr: float) -> dict:
 
 
 def suggest(fits: dict, fw: Firmware) -> list[str]:
-    """Suggest config.h constants from the pulse-space fits."""
+    """Suggest config.h constants from the pulse-space fits.
+
+    Args:
+        fits: Fits of each axis from fit_axis.
+        fw: Firmware constants the run used.
+    """
     dz = {a: fits.get(a, {}).get('deadzone_u') for a in AXES}
     if dz['x'] is not None:
         u0, k_x, src = dz['x'][0], dz['x'][1], 'the forward steps'
@@ -349,7 +416,13 @@ def suggest(fits: dict, fw: Firmware) -> list[str]:
 
 
 def analyse(d: dict, fw: Firmware, settle: float) -> tuple[list[Step], dict, dict]:
-    """Find, measure and fit the steps: (steps, still-spell statistics, fits per axis)."""
+    """Find, measure and fit the steps, returning (steps, still statistics, fits per axis).
+
+    Args:
+        d: Bag arrays from read_bag.
+        fw: Firmware constants the run used.
+        settle: Time left out at the start of each step, in seconds.
+    """
     steps = find_steps(d['cmd'])
     info = measure(steps, d, fw, settle) if steps else {}
     fits = {a: fit_axis([s for s in steps if s.axis == a], info['thr'][a])
@@ -426,7 +499,16 @@ def report(d: dict, fw: Firmware, settle: float, csv: Path | None = None) -> Non
 
 def simulate(seed: int = 3, u0: float = 45.0, k_us: float = 0.0011, eta_y: float = 0.8,
              l_eff: float = 0.19, fw: Firmware = Firmware()) -> dict:
-    """Simulate a drive_calibration_run.py run on a chassis of known deadband and gains."""
+    """Simulate a drive_calibration_run.py run on a chassis of known deadband and gains.
+
+    Args:
+        seed: Random seed.
+        u0: Pulse deadband each side of neutral, in us.
+        k_us: Wheel speed per us past the deadband, in m/s.
+        eta_y: Sideways speed per us as a fraction of the forward speed.
+        l_eff: Effective turn radius, in m.
+        fw: Firmware constants that map commands to pulses.
+    """
     rng = np.random.default_rng(seed)
     speeds = {'x': (0.02, 0.04, 0.06, 0.10, 0.15), 'y': (0.02, 0.04, 0.06, 0.10, 0.15),
               'r': (0.05, 0.1, 0.2, 0.3, 0.5)}

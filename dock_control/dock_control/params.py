@@ -24,7 +24,13 @@ def default_path():
 
 
 def load(path):
-    """Load a parameter file and return its ``dock`` mapping."""
+    """Load a parameter file and return its ``dock`` mapping.
+
+    Every value must be a number or a list of numbers, so ``5.8e6`` read as a string is refused.
+
+    Args:
+        path: Path of the YAML parameter file.
+    """
     with open(path) as f:
         p = yaml.safe_load(f)['dock']
     _require_numbers(p, 'dock')
@@ -43,7 +49,13 @@ def _require_numbers(node, where):
 
 
 def check(p):
-    """Recompute the derived MPC weights and return the mismatches (empty if consistent)."""
+    """Recompute the derived MPC weights and return the mismatches (empty if consistent).
+
+    Q_y = diag(y_tol^-2, y_tgt^-2, theta_tgt^-2) and R_u = diag(du_max^-2) (report eq. 15).
+
+    Args:
+        p: Parameters from load.
+    """
     lim, mpc, tol = p['lim'], p['mpc'], p['tol']
     du_max = [mpc['Ts'] * lim['a_max'], mpc['Ts'] * lim['a_max'], mpc['Ts'] * lim['alpha_max']]
     expected = {
@@ -60,7 +72,11 @@ def check(p):
 
 
 def from_node(node):
-    """Load the file named by the node's ``config`` parameter; refuse to start if inconsistent."""
+    """Load the file named by the node's ``config`` parameter; refuse to start if inconsistent.
+
+    Args:
+        node: The node that declares the parameter.
+    """
     path = node.declare_parameter('config', '').value or default_path()
     p = load(path)
     mismatches = check(p)

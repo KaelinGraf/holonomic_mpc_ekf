@@ -36,7 +36,7 @@ def test_docks_from_the_report_start_pose(p):
 
 @pytest.mark.parametrize('start', [(-1.0, 0.3, 60.0), (-1.0, -0.3, -70.0)])
 def test_docks_from_far_off_the_boards_normal(p, start):
-    """No heading corridor: the cost alone brings a start 60-70 deg off the normal into line."""
+    """Check that the cost alone brings a start 60-70 deg off the board's normal into line."""
     r = _dock(p, start, seconds=60.0)
     assert r['stage'] == Stage.DOCKED
     assert abs(r['pose'][1]) < p['tol']['y']
@@ -47,7 +47,7 @@ def test_docks_from_far_off_the_boards_normal(p, start):
 
 @pytest.mark.parametrize('start', [(-0.55, -0.03, 1.0), (-1.0, 0.3, 40.0)])
 def test_the_robots_lag_and_drift_neither_rock_the_heading_nor_leave_it_beside_the_dock(p, start):
-    """The robot of 2026-10-13: wheels lagging 0.15 s, commands 50 ms late, drifting sideways."""
+    """Dock with lagging wheels, late commands and sideways drift: no rocking, no lateral miss."""
     r = _dock(p, start, seconds=60.0, tau=0.15, cmd_delay_s=0.05, drift=-0.15)
     assert r['stage'] == Stage.DOCKED
     assert r['final_theta_sd'] < math.radians(1.0)
@@ -56,7 +56,16 @@ def test_the_robots_lag_and_drift_neither_rock_the_heading_nor_leave_it_beside_t
 
 
 def _dock(p, start, seconds=40.0, tau=TAU, cmd_delay_s=0.0, drift=0.0):
-    """Run the closed loop from start (x, y [m], theta [deg]); return where and how it ended."""
+    """Run the closed loop from start (x, y [m], theta [deg]); return where and how it ended.
+
+    Args:
+        p: Demo parameters.
+        start: Start pose (x [m], y [m], theta [deg]) in the target frame.
+        seconds: Simulated time limit [s].
+        tau: Time constant of the wheel loops [s].
+        cmd_delay_s: Delay before a command reaches the wheels [s].
+        drift: Sideways velocity per unit forward velocity.
+    """
     pytest.importorskip('daqp')
     from dock_control.mpc import Mpc
     rng = np.random.default_rng(1)

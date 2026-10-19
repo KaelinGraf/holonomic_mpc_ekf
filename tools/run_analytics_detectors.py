@@ -66,7 +66,10 @@ FIXED_UNTIL = 1791867795.0
 
 @functools.lru_cache(maxsize=None)
 def camera_epochs() -> tuple:
-    """(start, description, K, dist) of each camera matrix, oldest first: the two set by hand, then cfg.yaml's."""
+    """Return (start, description, K, dist) of each camera matrix, oldest first.
+
+    The first two are set by hand; the rest come from the history of cfg.yaml.
+    """
     import yaml
     eps = list(CAMERA_FIXED)
     log = subprocess.run(['git', '-C', str(WIRELESS), 'log', '--reverse', '--format=%h %ct', '--', 'cfg/cfg.yaml'],
@@ -93,7 +96,12 @@ INK, INK2, MUTED = '#0b0b0b', '#52514e', '#898781'
 
 
 def pc(v, spec: str = '.1%') -> str:
-    """A share as a percentage, 'n/a' when missing."""
+    """Format a share as a percentage, or 'n/a' when it is missing.
+
+    Args:
+        v: Share, as a fraction, or None.
+        spec: Format spec.
+    """
     return 'n/a' if v is None or (isinstance(v, float) and not math.isfinite(v)) else format(v, spec)
 
 
@@ -102,7 +110,11 @@ def camera_at(t: float):
 
 
 def prepare(bag_root: Path) -> list:
-    """Sample frames from every bag with an image topic into CACHE/<bag>.npz; return the sets written."""
+    """Sample frames from each bag with an image topic into CACHE/<bag>.npz; return the sets.
+
+    Args:
+        bag_root: Bag, or folder of bags, to sample.
+    """
     import cv2
     import rosbag2_py
     from rclpy.serialization import deserialize_message
@@ -163,7 +175,7 @@ def prepare(bag_root: Path) -> list:
 
 
 def heldout_frames():
-    """(frames, s_px, stamps, brightness level) of the offline loop's gen2 held-out chunks."""
+    """Return (frames, s_px, stamps, brightness level) of the gen2 held-out chunks."""
     frames, s_px, stamps, level = [], [], [], []
     for d in sorted(HELDOUT.iterdir()):
         recs = json.loads((d / 'records.json').read_text())['records']
@@ -177,7 +189,11 @@ def heldout_frames():
 
 
 def infer(key: str) -> None:
-    """Run ONE detector over every cached set and the held-out frames; one pipeline, this thread only."""
+    """Run one detector over every cached set and the held-out frames, from this thread only.
+
+    Args:
+        key: Detector key: release, r3 or r1.
+    """
     import yaml
     sys.path.insert(0, str(WIRELESS / 'src'))
     from inference import inference_pipeline
@@ -229,7 +245,7 @@ def infer(key: str) -> None:
 
 
 def run_all_detectors() -> None:
-    """Each detector in a process of its own, one after the other (GPU)."""
+    """Run each detector on the GPU in a process of its own, one after the other."""
     for key in DETECTORS:
         t = time.time()
         p = subprocess.run([sys.executable, str(Path(__file__).resolve()), 'infer', key])
@@ -250,7 +266,12 @@ def load_results():
 
 
 def s_px_from(rows_by_key: dict, fx: float) -> np.ndarray:
-    """Apparent square size per frame from the solving models' range: fx L / z, the median over models."""
+    """Return each frame's apparent square size, fx L / z, with z the median over the models.
+
+    Args:
+        rows_by_key: Results of each detector, keyed by detector.
+        fx: Focal length, in pixels.
+    """
     zs = np.c_[[r['rows'][:, 4] for r in rows_by_key.values()]].T
     with np.errstate(invalid='ignore'):
         return fx * SQUARE_M / np.nanmedian(np.where(np.isfinite(zs), zs, np.nan), axis=1)
@@ -279,7 +300,13 @@ def bucket_table(rows_by_key: dict, s_px: np.ndarray, edges) -> list:
 
 
 def live_identification(name: str, z, res: dict) -> dict:
-    """Which detector reproduces the poses the live pipeline logged for these frames."""
+    """Identify which detector reproduces the poses the live pipeline logged for these frames.
+
+    Args:
+        name: Name of the frame set.
+        z: Cached frame set, with the live results.
+        res: Results of each detector on the set, keyed by detector.
+    """
     live = z['live']
     have = np.isfinite(live[:, 0])
     out = {'frames_with_live': int(have.sum())}
@@ -514,7 +541,13 @@ def figure_notes(summary: dict) -> list:
 
 
 def finetune(out: Path) -> None:
-    """Gather the self-supervised fine-tuning records: sessions, rounds, gates, recall, ambiguity, deployments."""
+    """Gather the self-supervised fine-tuning records into one index.
+
+    The index covers sessions, rounds, gates, recall, ambiguity and deployments.
+
+    Args:
+        out: Output directory.
+    """
     sys.path.insert(0, str(TOOLS))
     from run_analytics import git, nz, table
     out.mkdir(parents=True, exist_ok=True)
@@ -610,7 +643,15 @@ def main() -> None:
 
 
 def compare_bags(bag_root: Path, out: Path, rerun: bool = False) -> None:
-    """run_analytics.py --detectors: prepare, each detector in its own process, summarise."""
+    """Run the detector comparison: prepare, each detector in its own process, then summarise.
+
+    The GPU runs only for detectors without cached results, or for all of them with rerun.
+
+    Args:
+        bag_root: Bag, or folder of bags, to sample.
+        out: Output directory for the summary.
+        rerun: Run every detector again, even with cached results.
+    """
     prepare(bag_root)
     res = CACHE / 'results'
     sets = [f.stem for f in CACHE.glob('*.npz')] + ['heldout']

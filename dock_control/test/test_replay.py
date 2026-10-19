@@ -16,4 +16,4 @@ def test_ekf_replay_matches_matlab(p):
 
 @pytest.mark.skip(reason='TODO: needs test/fixtures/ from export_fixtures.m')
 def test_mpc_tick_matches_matlab(p):
-    """Run the dumped MATLAB tick through Mpc.step: dU agrees to the solver tolerance."""
+    """Run the dumped MATLAB tick through Mpc.step and match its dU to the solver tolerance."""

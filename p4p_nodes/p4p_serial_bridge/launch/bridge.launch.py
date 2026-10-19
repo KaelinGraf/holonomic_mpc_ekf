@@ -16,7 +16,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
-    """Declare the arguments worth overriding from the command line."""
+    """Build the bridge node and the launch arguments worth overriding from the command line."""
     args = [
         DeclareLaunchArgument('port', default_value='/dev/ttyACM0'),
         DeclareLaunchArgument('command_rate_hz', default_value='20.0'),

@@ -16,7 +16,7 @@ def _rot(rx, ry, rz):
 
 
 def test_wrap_pi_lands_in_the_half_open_interval():
-    """Every angle maps into (-pi, pi], with pi kept and -pi sent to pi."""
+    """Check that every angle maps into (-pi, pi], with pi kept and -pi sent to pi."""
     assert wrap_pi(math.pi) == pytest.approx(math.pi)
     assert wrap_pi(-math.pi) == pytest.approx(math.pi)
     assert wrap_pi(3.0 * math.pi) == pytest.approx(math.pi)
@@ -28,7 +28,7 @@ def test_wrap_pi_lands_in_the_half_open_interval():
 
 
 def test_rigid_inverse():
-    """The transpose-based inverse undoes the transform."""
+    """Check that the transpose-based inverse undoes the transform."""
     T = se3(rot_z(0.7), [0.1, -0.2, 0.3])
     assert np.allclose(se3_inv(T) @ T, np.eye(4))
 
@@ -36,7 +36,7 @@ def test_rigid_inverse():
 @pytest.mark.parametrize('angles', [(0.3, -0.2, 1.1), (math.pi, 0.0, 0.0), (0.0, math.pi, 0.0),
                                     (0.0, 0.0, math.pi), (2.0, 2.5, -3.0)])
 def test_quaternion_round_trip(angles):
-    """The two quaternion conversions are inverses, including at 180 degrees."""
+    """Check that the two quaternion conversions are inverses, including at 180 degrees."""
     R = _rot(*angles)
     q = rot_to_quat(R)
     assert np.linalg.norm(q) == pytest.approx(1.0)
@@ -45,7 +45,7 @@ def test_quaternion_round_trip(angles):
 
 @pytest.mark.parametrize('roll, pitch', [(0.0, 0.0), (0.1, 0.0), (0.0, -0.15), (0.2, 0.3)])
 def test_body_gravity_is_what_a_tilted_accelerometer_reads_at_rest(roll, pitch):
-    """Gravity in x and y follows the tilt, and not the yaw (the game vector's drift)."""
+    """Check that gravity in x and y follows the tilt and not the yaw."""
     for yaw in (0.0, 1.0, -2.5):
         R = _rot(roll, pitch, yaw)
         at_rest = R.T @ [0.0, 0.0, GRAVITY]

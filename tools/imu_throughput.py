@@ -34,8 +34,15 @@ def stats_ms(values) -> dict:
 
 
 def summarize(arrivals, stamps, accel_cov, expect_hz, clock_offset=0.0) -> dict:
-    """The report for one capture: arrival times on this clock, header stamps on the publisher's, and each
-    message's linear_acceleration_covariance[0]."""
+    """Build the throughput report for one capture.
+
+    Args:
+        arrivals: Arrival time of each message on this machine's clock, in seconds.
+        stamps: Header stamp of each message on the publisher's clock, in seconds.
+        accel_cov: linear_acceleration_covariance[0] of each message.
+        expect_hz: Expected publish rate, in Hz.
+        clock_offset: Publisher's clock minus this machine's clock, in seconds.
+    """
     arrivals, stamps = np.asarray(arrivals, dtype=float), np.asarray(stamps, dtype=float)
     span = arrivals[-1] - arrivals[0]
     period = 1.0 / expect_hz

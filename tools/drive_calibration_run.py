@@ -56,11 +56,15 @@ STOP_TIMEOUT_S = 10.0
 
 
 class Abort(Exception):
-    """Stop the run: zeros, disarm, close the bag."""
+    """Signal to stop the run: zeros, disarm, close the bag."""
 
 
 def plan(axes):
-    """Return the steps, in order: (axis, signed command)."""
+    """Return the steps in order, as (axis, signed command) pairs.
+
+    Args:
+        axes: Axes to step, each 'x', 'y' or 'r'.
+    """
     steps = []
     for axis in axes:
         for speed in SPEEDS[axis]:
@@ -69,13 +73,24 @@ def plan(axes):
 
 
 def twist_of(axis, value):
-    """(vx, vy, wz) with one axis set."""
+    """Return (vx, vy, wz) with one axis set.
+
+    Args:
+        axis: Axis to set: 'x', 'y' or 'r'.
+        value: Command for that axis, in m/s or rad/s.
+    """
     return (value if axis == 'x' else 0.0, value if axis == 'y' else 0.0,
             value if axis == 'r' else 0.0)
 
 
 def summarise(fixes, t0, t1):
-    """Return the fixes' (n, span, forward, left, turn [rad]) over [t0, t1], in the body frame."""
+    """Return the fixes' (n, span, forward, left, turn [rad]) over [t0, t1], in the body frame.
+
+    Args:
+        fixes: (capture stamp, x, y, theta, ambiguous, range) of each fix.
+        t0: Start of the window, in seconds.
+        t1: End of the window, in seconds.
+    """
     use = [f for f in fixes if t0 <= f[0] <= t1]
     clear = [f for f in use if not f[4]]
     use = clear if len(clear) >= 5 else use
@@ -92,7 +107,12 @@ def summarise(fixes, t0, t1):
 
 
 class Run:
-    """The ROS side: one node, spun by hand between publishes."""
+    """The ROS side of the run: one node, spun by hand between publishes.
+
+    Args:
+        rclpy: The rclpy module, already initialised.
+        args: Parsed command-line arguments.
+    """
 
     def __init__(self, rclpy, args):
         from convchart_interfaces.msg import DriveStatus
@@ -144,7 +164,12 @@ class Run:
         return time.monotonic() - self.fix_arrivals[-1] if self.fix_arrivals else math.inf
 
     def spin_for(self, seconds, command=None):
-        """Spin for seconds; with a command, publish it at COMMAND_HZ and check it is safe to."""
+        """Spin for a time; with a command, publish it at COMMAND_HZ and check that it is safe to.
+
+        Args:
+            seconds: How long to spin, in seconds.
+            command: (vx, vy, wz) to publish, or None to spin only.
+        """
         msg = None
         if command is not None:
             msg = self.Twist()
@@ -164,7 +189,7 @@ class Run:
             self.rclpy.spin_once(self.node, timeout_sec=max(0.0, min(wake - now, 0.05)))
 
     def check(self):
-        """Abort if docking was armed, or the drive disarmed or lost, while the run had it."""
+        """Abort if docking is armed, or the drive is disarmed or lost, while the run holds it."""
         if self.stage is not None and self.stage != self.DockStage.IDLE:
             raise Abort(f'docking left IDLE (stage {self.stage}): the MPC would fight this run')
         if self.status.state < self.DriveStatus.STALLED:
@@ -173,7 +198,11 @@ class Run:
             raise Abort('drive/status has gone quiet: is the serial bridge still running?')
 
     def arm(self, on):
-        """Call /serial_bridge/arm; True when the bridge says it went out."""
+        """Call /serial_bridge/arm and return True when the bridge says the request went out.
+
+        Args:
+            on: True to arm, False to disarm.
+        """
         if not self.arm_client.wait_for_service(timeout_sec=2.0):
             return False
         future = self.arm_client.call_async(self.SetBool.Request(data=on))
@@ -186,7 +215,12 @@ class Run:
 
 
 def preflight(run, args):
-    """Wait for the inputs; return a reason not to start, or ''."""
+    """Wait for the inputs and return a reason not to start, or ''.
+
+    Args:
+        run: Run whose node receives the inputs.
+        args: Parsed command-line arguments.
+    """
     deadline = time.monotonic() + args.wait
     while time.monotonic() < deadline:
         run.spin_for(0.1)
@@ -210,7 +244,11 @@ def preflight(run, args):
 
 
 def start_recorder(path):
-    """Start ros2 bag record of TOPICS into path, logging to path.log."""
+    """Start ros2 bag record of TOPICS into path, logging to path.log.
+
+    Args:
+        path: Output bag directory.
+    """
     log = open(path + '.log', 'w')
     proc = subprocess.Popen(['ros2', 'bag', 'record', '-o', path, *TOPICS], stdout=log,
                             stderr=subprocess.STDOUT,
@@ -219,7 +257,11 @@ def start_recorder(path):
 
 
 def recorder_subscribed(path):
-    """Return the TOPICS the recorder's log says it has subscribed to."""
+    """Return the TOPICS the recorder's log says it has subscribed to.
+
+    Args:
+        path: Bag directory the recorder writes, beside its .log file.
+    """
     try:
         text = open(path + '.log').read()
     except OSError:
@@ -228,7 +270,11 @@ def recorder_subscribed(path):
 
 
 def stop_recorder(proc):
-    """SIGINT the recorder, which closes the bag with its metadata, and wait for it."""
+    """Send SIGINT to the recorder, which closes the bag with its metadata, and wait for it.
+
+    Args:
+        proc: Recorder process, or None.
+    """
     if proc is None or proc.poll() is not None:
         return
     proc.send_signal(signal.SIGINT)

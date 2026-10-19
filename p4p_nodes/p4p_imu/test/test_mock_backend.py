@@ -46,8 +46,7 @@ def test_an_unknown_backend_is_refused_by_name():
 
 
 def test_the_factory_never_substitutes_a_working_backend_for_a_broken_one():
-    """A synthetic heading steering a robot is worse than none, because it looks
-    exactly like a working IMU. There is no fallback, by design."""
+    """Check that the factory raises for a misspelt backend instead of returning the mock."""
     with pytest.raises(ImuError):
         make_backend('bno08x_typo', {}, _Log())
 
@@ -79,7 +78,7 @@ def test_every_sample_is_valid():
 
 
 def test_consecutive_samples_differ():
-    """Otherwise the node's staleness watchdog would fire against the mock."""
+    """Check that consecutive mock samples differ, so the staleness watchdog stays quiet."""
     backend = _started()
     first, second = backend.read(), backend.read()
     assert orientation.samples_differ(first, second)
@@ -98,7 +97,7 @@ def test_different_seeds_give_different_streams():
 
 
 def test_the_gyro_carries_the_configured_turn_rate():
-    """So a node test asserting on angular_velocity.z is checking the node."""
+    """Check that gyro z carries the configured mock_yaw_rate."""
     backend = _started(mock_yaw_rate=0.75, mock_noise=0.0)
     assert backend.read().gyro[2] == pytest.approx(0.75)
 
@@ -109,8 +108,7 @@ def test_gravity_sits_in_plus_z_because_the_board_is_flat():
 
 
 def test_heading_advances_and_wraps_through_pi_without_unwrapping():
-    """The accepted consequence of publishing sensor_msgs/Imu alone: the
-    quaternion wraps and nothing hands out an unwrapped heading."""
+    """Check that the mock heading advances and wraps through pi without being unwrapped."""
     backend = _started(mock_yaw_rate=2.0, mock_noise=0.0)
     yaws = [orientation.yaw_from_quaternion(backend.read().quat) for _ in range(400)]
     assert all(-math.pi <= y <= math.pi for y in yaws)
@@ -118,7 +116,7 @@ def test_heading_advances_and_wraps_through_pi_without_unwrapping():
 
 
 def test_a_spontaneous_reset_is_raised_once_then_heading_re_zeroes():
-    """The real post-reset behaviour the node must publish uncompensated."""
+    """Check that mock_reset_after raises one reset, after which the heading re-zeroes."""
     backend = _started(mock_reset_after=5, mock_yaw_rate=2.0, mock_noise=0.0)
     for _ in range(5):
         backend.read()
@@ -136,8 +134,7 @@ def test_a_spontaneous_reset_is_raised_once_then_heading_re_zeroes():
 
 
 def test_a_stall_returns_the_same_sample_forever_with_no_error():
-    """The only path to the staleness watchdog: this is what a silent reset looks
-    like through the vendor library, which raises nothing and serves its cache."""
+    """Check that a stall serves the same sample forever without raising, like a silent reset."""
     backend = _started(mock_stall_after=3)
     for _ in range(3):
         backend.read()
@@ -166,7 +163,7 @@ def test_refused_opens_count_across_the_fresh_backends_the_node_makes():
 
 
 def test_the_placeholder_window_serves_samples_the_validator_rejects():
-    """What the vendor library hands over between enable_feature() and real data."""
+    """Check that the placeholder window serves samples that fail validation, then real ones."""
     backend = _started(mock_placeholder_reads=3)
     for _ in range(3):
         assert orientation.validate(backend.read()) is not None

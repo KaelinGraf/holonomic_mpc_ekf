@@ -24,7 +24,15 @@ import protocol  # noqa: E402, I100
 
 
 def drive(mega, t_from, t_to, feed=None, at=None):
-    """Pump the simulator over a span of virtual ms, optionally feeding bytes."""
+    """Pump the simulator over a span of virtual time and return the rows it decoded to.
+
+    Args:
+        mega: FakeMega simulator.
+        t_from: First virtual time to pump [ms].
+        t_to: Last virtual time to pump, inclusive [ms].
+        feed: Bytes to feed the simulator once, or None.
+        at: Virtual time to feed them at [ms]; None feeds them on the first step.
+    """
     rows = []
     for t in range(t_from, t_to + 1):
         if feed is not None and (at is None or t == at):
@@ -98,7 +106,7 @@ def test_disarmed_rows_report_neutral_pulses(mega):
 
 
 def test_legacy_firmware_rows_still_parse():
-    """The firmware before 2026-10-13 sends nine columns; they decode, without the new fields."""
+    """Legacy nine-column rows decode, with no request or pulse widths."""
     old = fake_mega.FakeMega(legacy_telemetry=True)
     old.drain()
     old.feed(protocol.ARM + protocol.format_velocity(0.25, 0.0, 0.0))
@@ -226,7 +234,7 @@ def test_line_reader_bounds_a_stream_with_no_newlines():
 
 
 def test_line_reader_keeps_every_row_in_an_oversized_read():
-    """A read larger than max_len must not cost us complete rows."""
+    """A read larger than max_len keeps every complete row."""
     source = fake_mega.FakeMega()
     source.feed(protocol.ARM + protocol.format_velocity(0.1, 0.0, 0.0))
     blob = b''

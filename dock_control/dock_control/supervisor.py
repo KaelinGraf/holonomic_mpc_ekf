@@ -53,7 +53,23 @@ MOVING = (Stage.APPROACH, Stage.FINAL, Stage.HOLD)
 
 @dataclass
 class Inputs:
-    """Everything step() reads, kept current by mpc_node."""
+    """Everything step() reads, kept current by mpc_node.
+
+    Args:
+        now: ROS time [s].
+        armed: Operator request, from dock/arm.
+        drive_ok: Whether the serial bridge is armed and streaming (STALLED or RUNNING).
+        x: Latest estimate [x, y, theta, vx, vy]; None until the EKF starts.
+        p_diag: Covariance diagonal of that estimate.
+        est_age: Time since that estimate's IMU sample [s].
+        imu_rate: IMU samples per second, as the EKF measures them [Hz].
+        fix_age: Time since the last accepted fix [s].
+        roll: Roll of the latest fix [rad], monitored only.
+        pitch: Pitch of the latest fix [rad], monitored only.
+        u_last: Last body command [u_b, v_b, r_b].
+        mpc_misses: Consecutive ticks with a fallback or a blown budget.
+        r_gyro: Yaw rate [rad/s], for the settle check at the standoff.
+    """
 
     now: float = 0.0
     armed: bool = False
@@ -72,7 +88,18 @@ class Inputs:
 
 @dataclass
 class Output:
-    """What one DockStage message carries."""
+    """What one DockStage message carries.
+
+    Args:
+        stage: Current stage.
+        y_ref: Pose reference [x, y, theta] in the target frame [m, m, rad].
+        v_max: Translational speed cap [m/s].
+        r_max: Yaw-rate cap [rad/s].
+        command_enabled: Whether the MPC commands the drive this tick.
+        qw: Tracking multipliers [x, y, theta] for this tick's MPC.
+        l1_cap: Whether to cap |u_b| + |v_b| rather than each axis on its own.
+        v_lat_max: Cap on |v_b| apart from |u_b| in FINAL [m/s]; None uses v_max.
+    """
 
     stage: Stage = Stage.IDLE
     y_ref: tuple = (0.0, 0.0, 0.0)
@@ -85,7 +112,11 @@ class Output:
 
 
 class Supervisor:
-    """The stage machine of brief Section 7."""
+    """Docking stage machine: the stage, reference and speed caps for each MPC tick.
+
+    Args:
+        p: Parameters from params.load (the sup, lim, tol, mpc, imu and geom sections).
+    """
 
     def __init__(self, p):
         sup, lim, tol, mpc = p['sup'], p['lim'], p['tol'], p['mpc']
@@ -134,7 +165,13 @@ class Supervisor:
         self.aligned_since = None
 
     def step(self, inp):
-        """Advance the stage machine one tick and return the Output to publish."""
+        """Advance the stage machine one tick and return the Output to publish.
+
+        Disarming returns to IDLE from any stage; DOCKED and ABORT stay until the operator disarms.
+
+        Args:
+            inp: This tick's Inputs.
+        """
         stage = self.out.stage
         if not inp.armed:
             nxt = Stage.IDLE
@@ -170,23 +207,41 @@ class Supervisor:
         return self.out
 
     def _unsafe(self, inp):
-        """Return whether to abort a moving stage: drive lost, estimate stale, or covariance."""
+        """Return whether to abort a moving stage: drive lost, estimate stale or too uncertain.
+
+        Args:
+            inp: This tick's Inputs.
+        """
         return (not inp.drive_ok or inp.est_age > EST_TIMEOUT_S
                 or inp.p_diag[0] > self.p_abort or inp.p_diag[1] > self.p_abort)
 
     def _ready(self, inp):
-        """Return whether to start moving: estimate fresh and sure, IMU >= 90 %, drive armed."""
+        """Return whether to start moving: estimate fresh and sure, IMU >= 90 %, drive armed.
+
+        Args:
+            inp: This tick's Inputs.
+        """
         return (inp.x is not None and inp.drive_ok and inp.est_age <= EST_TIMEOUT_S
                 and inp.imu_rate >= self.imu_rate_min
                 and inp.p_diag[0] < self.p_start and inp.p_diag[1] < self.p_start)
 
     def _aligned(self, x):
-        """Return whether the robot is aligned at the standoff."""
+        """Return whether the robot is aligned at the standoff.
+
+        Tests |y| < align_tol_m, |theta| < align_tol_deg and |x - standoff| < standoff_tol.
+
+        Args:
+            x: Estimate [x, y, theta, vx, vy] in the target frame.
+        """
         return (abs(x[1]) < self.align_tol_y and abs(x[2]) < self.align_tol_th
                 and abs(x[0] - self.standoff_ref[0]) < self.standoff_tol)
 
     def _settled_aligned(self, inp):
-        """Return whether the robot has stood aligned at the standoff for align_dwell_s."""
+        """Return whether the robot has stood aligned at the standoff for align_dwell_s.
+
+        Args:
+            inp: This tick's Inputs.
+        """
         x = inp.x
         if not (self._aligned(x) and x[3] * x[3] + x[4] * x[4] < self.align_vtol_sq
                 and abs(inp.r_gyro) < self.align_rtol):
@@ -197,19 +252,33 @@ class Supervisor:
         return inp.now - self.aligned_since >= self.align_dwell
 
     def _docked(self, x):
-        """Return whether docked: x >= -dock_tol, speed < dock_vtol, |y|, |theta| in tol.tgt_*."""
+        """Return whether docked: x >= -dock_tol, speed < dock_vtol, |y|, |theta| in tol.tgt_*.
+
+        Args:
+            x: Estimate [x, y, theta, vx, vy] in the target frame.
+        """
         return (x[0] >= -self.dock_tol and x[3] * x[3] + x[4] * x[4] < self.dock_vtol_sq
                 and abs(x[1]) <= self.tgt_y and abs(x[2]) <= self.tgt_th)
 
     def _ramped_cap(self, u_last):
-        """Return the falling speed cap of FINAL and HOLD, never stepped."""
+        """Return the falling speed cap of FINAL and HOLD, never stepped.
+
+        The cap on |u_b| + |v_b| falls by min(|u_b|, du_max) + min(|v_b|, du_max) a tick.
+
+        Args:
+            u_last: Last body command [u_b, v_b, r_b]; None gives v_final.
+        """
         if u_last is None:
             return self.v_final
         ub, vb = abs(u_last[0]), abs(u_last[1])
         return max(self.v_final, ub + vb - min(ub, self.du_t) - min(vb, self.du_t))
 
     def approach_qw(self, x):
-        """Return APPROACH's tracking multipliers at estimate x (qw_ramp_m: from qw to qw_near)."""
+        """Return APPROACH's tracking multipliers at estimate x (qw_ramp_m: from qw to qw_near).
+
+        Args:
+            x: Estimate [x, y, theta, vx, vy] in the target frame, or None.
+        """
         if self.qw_ramp is None or x is None:
             return self.qw_approach
         far, near = self.qw_ramp
@@ -219,7 +288,11 @@ class Supervisor:
         return tuple(a + s * (b - a) for a, b in zip(self.qw_approach, self.qw_near))
 
     def look_at(self, x):
-        """Return APPROACH's heading reference at estimate x (look_at_m: bearing to theta = 0)."""
+        """Return APPROACH's heading reference at estimate x (look_at_m: bearing to theta = 0).
+
+        Args:
+            x: Estimate [x, y, theta, vx, vy] in the target frame, or None.
+        """
         if self.look_at_m is None or x is None:
             return 0.0
         free, lock = self.look_at_m
@@ -232,13 +305,22 @@ class Supervisor:
         return w * math.atan2(self.marker_xy[1] - cam_y, self.marker_xy[0] - cam_x)
 
     def _straight_in_caps(self, u_last):
-        """Return FINAL's (v_max, v_lat_max): each axis falling by du_max a tick to its own cap."""
+        """Return FINAL's (v_max, v_lat_max): each axis falling by du_max a tick to its own cap.
+
+        Args:
+            u_last: Last body command [u_b, v_b, r_b], or None.
+        """
         ub, vb = (0.0, 0.0) if u_last is None else (abs(u_last[0]), abs(u_last[1]))
         return (max(self.v_final, min(self.v_approach, ub - self.du_t)),
                 max(self.v_lat_final, vb - self.du_t))
 
     def approach_cap(self, x, u_last):
-        """Return APPROACH's per-axis speed cap at estimate x, falling no faster than du_max."""
+        """Return APPROACH's per-axis speed cap at estimate x, falling no faster than du_max.
+
+        Args:
+            x: Estimate [x, y, theta, vx, vy] in the target frame, or None.
+            u_last: Last body command [u_b, v_b, r_b], or None.
+        """
         if self.slow_m is None or x is None:
             return self.v_approach
         start, end = self.slow_m
@@ -270,6 +352,10 @@ class Supervisor:
 
 
 def _triple(w):
-    """Return a per-axis weight as a tuple of three floats (a scalar applies to all three)."""
+    """Return a per-axis weight as a tuple of three floats (a scalar applies to all three).
+
+    Args:
+        w: Scalar or three per-axis values.
+    """
     a = np.broadcast_to(np.asarray(w, dtype=float), (3,))
     return tuple(float(v) for v in a)

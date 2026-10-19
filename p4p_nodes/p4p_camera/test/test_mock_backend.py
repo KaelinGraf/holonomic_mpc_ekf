@@ -69,7 +69,7 @@ def test_consecutive_frames_differ():
 
 
 def test_returned_frames_are_owned_by_the_caller():
-    """The core aliasing clause: a real camera recycles the buffer we read from."""
+    """Returned frames are copies, since a real camera recycles the buffer it reads into."""
     b = _backend()
     b.start()
     try:

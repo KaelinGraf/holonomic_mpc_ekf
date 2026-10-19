@@ -48,7 +48,14 @@ ARM = ("ros2 service call /serial_bridge/arm std_srvs/srv/SetBool '{data: true}'
 
 
 def _include(package, launch_file, prefix=None, **launch_arguments):
-    """Include a package's launch file, scoped; prefix, if given, runs its nodes under it (taskset, chrt)."""
+    """Include a package's launch file in a scope of its own.
+
+    Args:
+        package: Package whose share/launch directory holds the file.
+        launch_file: Launch file name.
+        prefix: Launch prefix to run its nodes under (taskset, chrt), or None to inherit one.
+        **launch_arguments: Launch arguments passed to the included file.
+    """
     source = PythonLaunchDescriptionSource(PathJoinSubstitution([FindPackageShare(package), 'launch', launch_file]))
     pinned = [SetLaunchConfiguration('launch-prefix', prefix)] if prefix else []
     return GroupAction([*pinned, IncludeLaunchDescription(source, launch_arguments=launch_arguments.items())],

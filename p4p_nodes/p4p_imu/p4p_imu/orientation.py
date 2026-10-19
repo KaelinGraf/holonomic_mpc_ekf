@@ -21,7 +21,13 @@ _MIN_QUAT_NORM = 1e-6
 
 @dataclass(frozen=True)
 class ImuSample:
-    """One coherent set of readings, taken at a single instant."""
+    """One coherent set of readings, taken at a single instant.
+
+    Args:
+        accel: Linear acceleration (x, y, z) in m/s^2, including gravity.
+        gyro: Angular velocity (x, y, z) in rad/s.
+        quat: Game rotation vector as an (i, j, k, real) quaternion.
+    """
 
     accel: tuple[float, float, float]
     gyro: tuple[float, float, float]
@@ -30,7 +36,11 @@ class ImuSample:
 
 def normalise_quaternion(
         quat: tuple[float, float, float, float]) -> tuple[float, float, float, float] | None:
-    """Scale a quaternion to unit length, or return None if it has no direction."""
+    """Scale a quaternion to unit length, or return None if it has no direction.
+
+    Args:
+        quat: Quaternion as (i, j, k, real).
+    """
     i, j, k, real = quat
     norm = math.sqrt(i * i + j * j + k * k + real * real)
     if not math.isfinite(norm) or norm < _MIN_QUAT_NORM:
@@ -39,7 +49,11 @@ def normalise_quaternion(
 
 
 def validate(sample: ImuSample) -> str | None:
-    """Return why the sample is unusable, or None when it is good."""
+    """Return why the sample is unusable, or None when it is good.
+
+    Args:
+        sample: Sample to check for non-finite values and library placeholders.
+    """
     if not all(math.isfinite(v) for v in (*sample.accel, *sample.gyro, *sample.quat)):
         return f'non-finite reading: accel={sample.accel} gyro={sample.gyro} quat={sample.quat}'
     if normalise_quaternion(sample.quat) is None:
@@ -50,24 +64,43 @@ def validate(sample: ImuSample) -> str | None:
 
 
 def samples_differ(a: ImuSample | None, b: ImuSample) -> bool:
-    """Report whether b carries anything new."""
+    """Report whether b carries anything new.
+
+    Args:
+        a: Previous sample, or None when there is none yet.
+        b: Latest sample, compared with a exactly.
+    """
     return a is None or (a.accel, a.gyro, a.quat) != (b.accel, b.gyro, b.quat)
 
 
 def yaw_from_quaternion(quat: tuple[float, float, float, float]) -> float:
-    """Extract rotation about +z, in (-pi, pi]."""
+    """Extract rotation about +z, in (-pi, pi].
+
+    Args:
+        quat: Quaternion as (i, j, k, real).
+    """
     i, j, k, real = quat
     return math.atan2(2.0 * (real * k + i * j),
                       1.0 - 2.0 * (j * j + k * k))
 
 
 def quaternion_from_yaw(yaw: float) -> tuple[float, float, float, float]:
-    """Build the (i, j, k, real) quaternion for a rotation of yaw about +z."""
+    """Build the (i, j, k, real) quaternion for a rotation of yaw about +z.
+
+    Args:
+        yaw: Rotation about +z in rad.
+    """
     return (0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0))
 
 
 def covariance(var_x: float, var_y: float, var_z: float) -> list[float]:
-    """Build a row-major 3x3 diagonal covariance for a sensor_msgs/Imu field."""
+    """Build a row-major 3x3 diagonal covariance for a sensor_msgs/Imu field.
+
+    Args:
+        var_x: Variance about or along x, in the field's units squared.
+        var_y: Variance about or along y, in the field's units squared.
+        var_z: Variance about or along z, in the field's units squared.
+    """
     return [var_x, 0.0, 0.0,
             0.0, var_y, 0.0,
             0.0, 0.0, var_z]
@@ -75,7 +108,15 @@ def covariance(var_x: float, var_y: float, var_z: float) -> list[float]:
 
 def explains_jump(prev_yaw: float, yaw: float, yaw_rate: float,
                   dt: float, tolerance: float) -> bool:
-    """Report whether the gyro accounts for the step in yaw since the last sample."""
+    """Report whether the gyro accounts for the step in yaw since the last sample.
+
+    Args:
+        prev_yaw: Yaw of the previous sample in rad.
+        yaw: Yaw of the latest sample in rad.
+        yaw_rate: Gyro rate about +z in rad/s.
+        dt: Time between the two samples in s.
+        tolerance: Largest allowed gap in rad between the yaw step and yaw_rate * dt.
+    """
     if not dt > 0.0:
         return True
     if not all(math.isfinite(v) for v in (prev_yaw, yaw, yaw_rate, dt, tolerance)):

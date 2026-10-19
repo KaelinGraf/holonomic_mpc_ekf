@@ -28,7 +28,12 @@ _GRAVITY = 9.80665
 
 
 class MockBackend(ImuBackend):
-    """Synthetic samples with injectable faults. Never a fallback for real hardware."""
+    """Synthetic BNO085 backend with injectable faults, never a fallback for real hardware.
+
+    Args:
+        params: Settings; reads sample_rate_hz and the mock_* knobs, and holds the open count.
+        logger: rclpy logger for status and warnings.
+    """
 
     name = 'mock'
 
@@ -87,18 +92,24 @@ class MockBackend(ImuBackend):
         return self._build()
 
     def recover(self) -> None:
-        """Re-enable reports after a reset. Always succeeds for the mock."""
+        """Re-enable reports after a reset.
+
+        Always succeeds once the mock has started.
+        """
         if not self._running:
             raise ImuError('mock imu recover before start')
         self._log.warning('mock imu recovered; heading has re-zeroed')
 
     def stop(self) -> None:
-        """Stop streaming. Idempotent, never raises."""
+        """Stop streaming.
+
+        Idempotent, and never raises.
+        """
         self._running = False
         self._stalled = None
 
     def _yaw(self) -> float:
-        """Yaw from the sample INDEX, not the clock, so the stream is reproducible."""
+        """Return yaw in rad from the sample index, not the clock, so runs repeat exactly."""
         return self._yaw_rate * self._n * self._period
 
     def _build(self) -> ImuSample:

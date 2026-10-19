@@ -36,12 +36,20 @@ JACOBIAN_STEP = 1e-6
 
 
 def _skew(v):
-    """Return [v]x, the matrix with [v]x w = v x w."""
+    """Return [v]x, the matrix with [v]x w = v x w.
+
+    Args:
+        v: 3-vector.
+    """
     return np.array([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
 
 
 def _rotation(phi):
-    """Return the rotation matrix of a rotation vector (Rodrigues)."""
+    """Return the rotation matrix of a rotation vector (Rodrigues).
+
+    Args:
+        phi: Rotation vector [rad].
+    """
     angle = float(np.linalg.norm(phi))
     if angle == 0.0:
         return np.eye(3)
@@ -50,7 +58,11 @@ def _rotation(phi):
 
 
 class FiducialChain:
-    """The constant factors of the chain, the per-frame step, and the simulation noise model."""
+    """The constant factors of the chain, the per-frame step, and the simulation noise model.
+
+    Args:
+        p: Parameters from params.load (the geom and fid sections).
+    """
 
     def __init__(self, p):
         g, fid = p['geom'], p['fid']
@@ -74,7 +86,14 @@ class FiducialChain:
         self.var_th_floor = math.radians(floor) ** 2 if floor else 0.0
 
     def chain(self, R_OM, t_OM):
-        """Return (x, y, theta, roll, pitch) of base_link in the target frame."""
+        """Return (x, y, theta, roll, pitch) of base_link in the target frame.
+
+        Only the board centre's ground position and its normal's yaw set the pose (report eq. 5).
+
+        Args:
+            R_OM: Board rotation in the camera's optical frame (3x3).
+            t_OM: Board origin in the optical frame [m].
+        """
         c = self.R_BO @ (R_OM @ self.c_M + t_OM) + self.p_BO
         n = -(self.R_BO @ R_OM[:, 2])
         horizontal = math.hypot(n[0], n[1])
@@ -92,7 +111,14 @@ class FiducialChain:
         return x, y, theta, roll, pitch
 
     def linearise(self, R_OM, t_OM):
-        """Return (z, roll, pitch, J): the chain at one board pose and its 3x6 Jacobian."""
+        """Return (z, roll, pitch, J): the chain at one board pose and its 3x6 Jacobian.
+
+        J maps a pose perturbation (dt, then dphi) to z = [x, y, theta], by central differences.
+
+        Args:
+            R_OM: Board rotation in the camera's optical frame (3x3).
+            t_OM: Board origin in the optical frame [m].
+        """
         x, y, theta, roll, pitch = self.chain(R_OM, t_OM)
         J, inv_2h = self._J, 0.5 / JACOBIAN_STEP
         for i in range(3):
@@ -107,12 +133,24 @@ class FiducialChain:
         return np.array((x, y, theta)), roll, pitch, J.copy()
 
     def measure(self, R_OM, t_OM, pose_cov):
-        """Return (z, R, roll, pitch) from one board pose and its live 6x6 covariance."""
+        """Return (z, R, roll, pitch) from one board pose and its live 6x6 covariance.
+
+        R = J pose_cov J', its heading variance raised to fid.sigma_th_floor_deg squared.
+
+        Args:
+            R_OM: Board rotation in the camera's optical frame (3x3).
+            t_OM: Board origin in the optical frame [m].
+            pose_cov: Pose covariance from the pipeline, in PoseWithCovariance order (6x6).
+        """
         z, roll, pitch, J = self.linearise(R_OM, t_OM)
         R = J @ pose_cov @ J.T
         R[2, 2] = max(R[2, 2], self.var_th_floor)
         return z, R, roll, pitch
 
     def sigma_p(self, d):
-        """Return the simulated position standard deviation at range d (report Section 2.2)."""
+        """Return the simulated position standard deviation at range d (report Section 2.2).
+
+        Args:
+            d: Range to the board [m].
+        """
         return self.sigma_p0 * math.sqrt(1.0 + d * d * self.inv_d0_sq)

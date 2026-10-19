@@ -20,25 +20,25 @@ BACKENDS = {
 
 
 class ImuError(RuntimeError):
-    """The sensor could not be opened, configured or read."""
+    """Error raised when the sensor cannot be opened, configured or read."""
 
 
 class ImuResetError(ImuError):
-    """The sensor reset ITSELF, and is recoverable in place."""
+    """Error raised when the sensor resets itself and can be recovered in place."""
 
 
 class ImuBackend(abc.ABC):
-    """One sensor, owned by one thread."""
+    """Abstract interface to one IMU, called only from the node's read thread."""
 
     name: str = 'backend'
 
     @abc.abstractmethod
     def start(self) -> None:
-        """Open the bus, configure the sensor, and wait for the first VALID sample."""
+        """Open the bus, configure the sensor, and wait for the first valid sample."""
 
     @abc.abstractmethod
     def read(self) -> ImuSample:
-        """Return one COHERENT sample: all three vectors from a single instant."""
+        """Return one coherent sample: all three vectors from a single instant."""
 
     @abc.abstractmethod
     def recover(self) -> None:
@@ -46,11 +46,20 @@ class ImuBackend(abc.ABC):
 
     @abc.abstractmethod
     def stop(self) -> None:
-        """Release the sensor and the bus."""
+        """Release the sensor and the bus.
+
+        Idempotent, and must not raise.
+        """
 
 
 def make_backend(name: str, params: dict, logger) -> ImuBackend:
-    """Instantiate a backend by name, importing its module lazily."""
+    """Instantiate a backend by name, importing its module lazily.
+
+    Args:
+        name: Backend name, a key of BACKENDS (bno08x or mock).
+        params: Backend settings gathered from the node's ROS parameters.
+        logger: rclpy logger the backend reports through.
+    """
     try:
         module_name, class_name = BACKENDS[name]
     except KeyError:

@@ -64,7 +64,7 @@ ACC_WINDOW_S = 0.7
 
 
 def _fit_module():
-    """Import drive_calibration_fit.py from beside this file (tools/ is not a package)."""
+    """Import drive_calibration_fit.py from beside this file, since tools/ is not a package."""
     path = Path(__file__).with_name('drive_calibration_fit.py')
     spec = importlib.util.spec_from_file_location('drive_calibration_fit', path)
     mod = importlib.util.module_from_spec(spec)
@@ -74,17 +74,32 @@ def _fit_module():
 
 
 def softplus(x, w=4.0):
-    """Return max(x, 0) smoothed over a few us, so that the deadbands have a gradient."""
+    """Return max(x, 0) smoothed over a few us, so that the deadbands have a gradient.
+
+    Args:
+        x: Input, in us.
+        w: Smoothing width, in us.
+    """
     return w * np.logaddexp(0.0, x / w)
 
 
 def pulses_for(cmd):
-    """Return the single-constant firmware's pulse offsets for a twist, in the mixing's sense."""
+    """Return the single-constant firmware's pulse offsets for a twist, in the mixing's sense.
+
+    Args:
+        cmd: Twist [vx, vy, wz], in m/s and rad/s.
+    """
     return US_PER_MPS * (J @ cmd)
 
 
 def predict(theta, p, smooth=True):
-    """Body response [vx, vy, wz] to pulse offsets p (mixing sense), for theta (see unpack)."""
+    """Return the body response [vx, vy, wz] to pulse offsets given in the mixing's sense.
+
+    Args:
+        theta: Wheel parameters, laid out as unpack describes.
+        p: Pulse offset of each wheel from neutral, in us, in the mixing's sense.
+        smooth: Smooth the deadbands with softplus, so that they have a gradient.
+    """
     g, d_pos, d_neg, eta, lever, g_neg = unpack(theta)
     past = np.abs(p) - np.where(p >= 0.0, d_pos, d_neg)
     gain = np.where(p >= 0.0, g, g_neg)
@@ -94,14 +109,25 @@ def predict(theta, p, smooth=True):
 
 
 def unpack(theta):
-    """Split theta into (gain +, deadband +, deadband -, eta, lever, gain -)."""
+    """Split theta into (gain +, deadband +, deadband -, eta, lever, gain -).
+
+    Without the optional gain - entries, each wheel has one gain for both directions.
+
+    Args:
+        theta: Gains x4 (mm/s per us), deadbands + x4 and - x4 (us), eta, lever (m), [gains - x4].
+    """
     g = theta[0:4] * 1e-3
     g_neg = theta[14:18] * 1e-3 if theta.size > 14 else g
     return g, theta[4:8], theta[8:12], theta[12], theta[13], g_neg
 
 
 def fit(rows, gain_per_direction=False):
-    """Least squares over every step; rows are (pulse offsets, measured [vx, vy, wz])."""
+    """Fit the wheel parameters by robust least squares over every step.
+
+    Args:
+        rows: (pulse offsets, measured [vx, vy, wz]) of each step.
+        gain_per_direction: Fit a gain per wheel and direction rather than one per wheel.
+    """
     from scipy.optimize import least_squares
 
     def resid(theta):
@@ -128,10 +154,12 @@ def fit(rows, gain_per_direction=False):
 
 
 def imu_speeds(bag, steps, yaw_deg=0.0):
-    """
-    Each step's [vx, vy] from the accelerometer: the change at its start, less at its stop.
+    """Return each step's [vx, vy] from the accelerometer, averaged over its start and stop.
 
-    The IMU's x and y are turned by yaw_deg into base_link's (imu.yaw_deg, as ekf_node does).
+    Args:
+        bag: Bag directory.
+        steps: Steps found in the bag's commands.
+        yaw_deg: Yaw of the IMU against base_link, in degrees.
     """
     import rosbag2_py
     from rclpy.serialization import deserialize_message
@@ -171,7 +199,14 @@ def imu_speeds(bag, steps, yaw_deg=0.0):
 
 
 def report(theta, rms, rows, labels):
-    """Print the wheels, each step against the model, and the config.h lines."""
+    """Print the wheels, each step against the model, and the config.h lines.
+
+    Args:
+        theta: Fitted wheel parameters.
+        rms: Residual rms, in sigma.
+        rows: (pulse offsets, measured [vx, vy, wz]) of each step.
+        labels: Label of each step.
+    """
     g, d_pos, d_neg, eta, lever, g_neg = unpack(theta)
     print(f'per-wheel fit: residual rms {rms:.2f} sigma over {len(rows)} steps')
     for i, n in enumerate(NAMES):
@@ -223,7 +258,7 @@ def selftest():
 
 
 def config_imu_yaw():
-    """dock_demo.yaml's imu.yaw_deg (0 without dock_control installed, or before it was measured)."""
+    """Return dock_demo.yaml's imu.yaw_deg, or 0 when dock_control or the key is missing."""
     try:
         from dock_control import params
         return float(params.load(params.default_path())['imu'].get('yaw_deg', 0.0))
